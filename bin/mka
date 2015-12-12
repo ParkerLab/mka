@@ -1,0 +1,73 @@
+#!/bin/bash
+
+#
+# mka: make analysis
+#
+# Creates a working directory for an analysis.
+#
+
+set -e
+set -o history
+shopt -s dotglob
+
+function trapper () {
+    printf "Error: "
+    history 1
+}
+
+trap trapper ERR
+
+function install_template () {
+    sed -e "s@{{AUTHOR}}@${AUTHOR}@g" \
+        -e "s@{{ANALYSIS_NAME}}@${ANALYSIS_NAME}@g" \
+        -e "s@{{CONTROL_PATH}}@${CONTROL_PATH}@g" \
+        -e "s@{{ANALYSIS_PATH}}@${ANALYSIS_PATH}@g" \
+        -e "s@{{ANALYSIS_WIKINAME}}@${ANALYSIS_WIKINAME}@g" \
+        $1 > ${CONTROL_PATH}/$(basename $1)
+}
+
+function show_help() {
+    echo -e "\nUsage:\n    $0 -h\n    $0 [-w ANALYSIS_PATH] ANALYSIS_NAME\n\n"
+    echo -e "You can specify a working directory with the -w option, if you."
+    echo -e "would like to separate control and execution (which is recommended)."
+    echo -e "The default is to do the work in the directory mka creates.\n"
+}
+
+ANALYSIS_PATH=''
+
+OPTIND=1
+while getopts "hw:" opt; do
+    case "$opt" in
+        h)
+            show_help
+            exit 0
+            ;;
+        w)
+            ANALYSIS_PATH="$OPTARG"
+            ;;
+    esac
+done
+
+shift "$((OPTIND - 1))"
+ANALYSIS_NAME="$1"
+
+AUTHOR=$(whoami)
+CONTROL_PATH=$(readlink -f $ANALYSIS_NAME)
+[[ -z $CONTROL_PATH ]] && printf "\nPlease supply the directory in which to create the analysis.\n\n" && exit 0
+ANALYSIS_PATH=${ANALYSIS_PATH:-${CONTROL_PATH}}
+ANALYSIS_WIKINAME=${ANALYSIS_NAME^}
+
+mkdir -p "${CONTROL_PATH}"
+
+for f in ${MKA_MODULE}/template/*
+do
+    install_template $f
+done
+
+cd $CONTROL_PATH
+
+git init -q
+git add -A
+git commit -q -m 'initial commit'
+
+printf "\nYour new analysis is ready in $CONTROL_PATH.\n\n"
