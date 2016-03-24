@@ -3,44 +3,55 @@
 #
 # mka: make analysis
 #
-# Creates a working directory for an analysis.
+# Creates a control directory for an analysis, ready for customization
+# and publication to GitHub and our wiki.
 #
+
+umask 002
 
 set -e
 set -o history
 shopt -s dotglob
 
-function trapper () {
-    printf "Error: "
-    history 1
-}
-
-trap trapper ERR
-
 function install_template () {
+    dest="${CONTROL_PATH}/$2"
     sed -e "s@{{AUTHOR}}@${AUTHOR}@g" \
         -e "s@{{ANALYSIS_NAME}}@${ANALYSIS_NAME}@g" \
         -e "s@{{CONTROL_PATH}}@${CONTROL_PATH}@g" \
         -e "s@{{ANALYSIS_PATH}}@${ANALYSIS_PATH}@g" \
         -e "s@{{ANALYSIS_WIKINAME}}@${ANALYSIS_WIKINAME}@g" \
-        $1 > ${CONTROL_PATH}/$(basename $1)
+        $1 > $dest
 }
 
+declare -a ANALYSIS_TYPES=($(ls -1 ${MKA_MODULE}/template/commands/commands.* | sed -r -e "s@^${MKA_MODULE}/template/commands/commands.@@" | sort | uniq))
+
 function show_help() {
-    echo -e "\nUsage:\n    $0 -h\n    $0 [-w ANALYSIS_PATH] ANALYSIS_NAME\n\n"
-    echo -e "You can specify a working directory with the -w option, if you."
+    cmd=$(basename $0)
+    echo -e "\nUsage:\n    $cmd -h\n    $cmd [-w ANALYSIS_PATH] [-t ANALYSIS_TYPE] ANALYSIS_NAME\n"
+    echo -e "You can specify a working directory with the -w option, if you"
     echo -e "would like to separate control and execution (which is recommended)."
     echo -e "The default is to do the work in the directory mka creates.\n"
+    echo -e "The usual commands file generated is just a stub, but with the -t option"
+    echo -e "you can request a more functional commands file for one of these analysis types:"
+    echo -e "${ANALYSIS_TYPES[@]/#/\n  }\n"
 }
 
 ANALYSIS_PATH=''
+ANALYSIS_TYPE=''
 
 OPTIND=1
-while getopts "hw:" opt; do
+while getopts "ht:w:" opt; do
     case "$opt" in
         h)
             show_help
             exit 0
+            ;;
+        t)
+            for analysis_type in ${ANALYSIS_TYPES[@]}
+            do
+                [[ "$OPTARG" == "$analysis_type" ]] && ANALYSIS_TYPE="$OPTARG"
+            done
+            [[ -z "$ANALYSIS_TYPE" ]] && (echo "Unsupported analysis type."; exit 1)
             ;;
         w)
             ANALYSIS_PATH="$OPTARG"
@@ -50,24 +61,47 @@ done
 
 shift "$((OPTIND - 1))"
 ANALYSIS_NAME="$1"
+[[ -z "$ANALYSIS_NAME" ]] && printf "\nPlease supply the directory in which to create the analysis.\n\n" && exit 1
 
 AUTHOR=$(whoami)
 CONTROL_PATH=$(readlink -f $ANALYSIS_NAME)
-[[ -z $CONTROL_PATH ]] && printf "\nPlease supply the directory in which to create the analysis.\n\n" && exit 0
 ANALYSIS_PATH=${ANALYSIS_PATH:-${CONTROL_PATH}}
 ANALYSIS_WIKINAME=${ANALYSIS_NAME^}
 
 mkdir -p "${CONTROL_PATH}"
 
-for f in ${MKA_MODULE}/template/*
+for t in ${MKA_MODULE}/template/*
 do
-    install_template $f
+    if [ -d "$t" ]
+    then
+        tbase=$(basename $t)
+        if [ "$ANALYSIS_TYPE" -a -r "${t}/${tbase}.${ANALYSIS_TYPE}" ]
+        then
+            install_template "${t}/${tbase}.${ANALYSIS_TYPE}" $(basename $t)
+        else
+            install_template "${t}/${tbase}.default" $(basename $t)
+        fi
+    else
+        install_template $t $(basename $t)
+    fi
 done
 
 cd $CONTROL_PATH
 
-git init -q
-git add -A
-git commit -q -m 'initial commit'
+if [ ! -d ".git" ]
+then
+    EMAIL=$(git config user.email || echo "")
+    if [ -z "$EMAIL" ]
+    then
+        read -p "Enter the email address you want to use when committing to this repo: " EMAIL
+        if [ -z "$EMAIL" ]
+        then
+            echo "Refusing to use a probably-incorrect default email address."
+            exit 1
+        fi
+    fi
+
+    (git init && git config --local user.email $EMAIL && git add -A && git commit -m 'initial commit') || (echo "Could not initialize git repository!" && exit 1)
+fi
 
 printf "\nYour new analysis is ready in $CONTROL_PATH.\n\n"

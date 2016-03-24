@@ -1,0 +1,597 @@
+#!/usr/bin/env python
+
+#
+# This commands template needs customization wherever you see CHANGES
+# REQUIRED. Where you see CHANGES RECOMMENDED, check that section to
+# make sure it works for your pipeline.
+#
+
+from __future__ import print_function
+
+import collections
+import functools
+import os
+
+
+DEFAULT_DIRECTORY_MODE = 0750
+
+ANALYSIS_NAME = "{{ANALYSIS_NAME}}"
+ANALYSIS_BASENAME = "{{ANALYSIS_NAME}}"
+ANALYSIS_SUBJECT = "{{ANALYSIS_NAME}} SUBJECT NOT SPECIFIED"
+ANALYSIS_GROUP = "{{ANALYSIS_NAME}} GROUP NOT SPECIFIED"
+
+CONTROL_PATH = "{{CONTROL_PATH}}"
+ANALYSIS_PATH = "{{ANALYSIS_PATH}}"
+DATA_PATH = os.path.join(ANALYSIS_PATH, 'data')
+WORK_PATH = os.path.join(ANALYSIS_PATH, 'work')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+# By default, we use ionice and limit the number of particularly
+# I/O-intensive jobs that run at once, to keep the machine
+# responsive. If you're running on dedicated cluster nodes, you
+# probably want to set this to False.
+LIMIT_IO = True
+
+
+#
+# The following are generic support functions. They shouldn't need
+# tweaking, but feel free.
+#
+
+
+def iterate_data(data, keys=[]):
+    """
+    Iterate the entire data dictionary, returning a list for each leaf node.
+
+    Each list in the returned list contains all the keys leading to
+    the leaf node, maybe something like:
+
+    [[organism, cell type, sample, file], [organism, cell type, sample, file], ...]
+    """
+    results = []
+    for key, values in sorted(data.items()):
+        if isinstance(values, collections.Mapping):
+            for result in iterate_data(values, keys=keys + [key]):
+                results.append(result)
+        elif isinstance(values, collections.Sequence):
+            for value in sorted(values):
+                results.append(keys + [key, value])
+        else:
+            results.append(keys + [key] + [values])
+    return results
+
+
+def maybe_gzip(filename, limit_io=LIMIT_IO):
+    """Compress a file with gzip."""
+    template_data = {
+        'f': filename,
+        'ionice': limit_io and 'ionice -c 3 ' or ''
+    }
+
+    command_template = """if [ -r "{f}" ]; then {ionice}gzip -f "{f}"; elif [ -r "{f}".gz ]; then echo '"{f}" already gzipped.'; fi"""
+
+    printp(command_template.format(**template_data))
+
+
+def mkdir(dir, mode=DEFAULT_DIRECTORY_MODE):
+    """Construct a directory hierarchy using the given permissions."""
+    if not os.path.exists(dir):
+        os.makedirs(dir, mode)
+
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c3 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+
+def symlink(source_path, dest_path):
+    """Create a symbolic link from the source_path to the dest_path, which can be a directory."""
+
+    dest = dest_path
+    dest_base = os.path.basename(dest)
+    if os.path.isdir(dest_path):
+        dest = os.path.join(dest_path, os.path.basename(source_path))
+        if os.path.lexists(dest):
+            os.unlink(dest)
+        os.symlink(source_path, dest)
+    else:
+        mkdir(os.path.dirname(dest_path))
+        if os.path.lexists(dest):
+            os.unlink(dest)
+        os.symlink(source_path, dest)
+    return dest, dest_base
+
+
+#
+#  End of generic, beginning of analysis-specific functions.
+#
+
+
+def gzip_macs2_output(root):
+    """
+    Gzip all the MACS2 output we request in ATAC-seq pipelines.
+    """
+    maybe_gzip("{}.broad_peaks.broadPeak".format(root))
+    maybe_gzip("{}.broad_peaks.gappedPeak".format(root))
+    maybe_gzip("{}.broad_control_lambda.bdg".format(root))
+    maybe_gzip("{}.broad_treat_pileup.bdg".format(root))
+
+    maybe_gzip("{}.summit_summits.bed".format(root))
+    maybe_gzip("{}.summit_peaks.narrowPeak".format(root))
+    maybe_gzip("{}.summit_control_lambda.bdg".format(root))
+    maybe_gzip("{}.summit_treat_pileup.bdg".format(root))
+
+
+def iterate_samples(data):
+    """
+    Iterate the second level of the data dictionary, which in this example pipeline contains samples and their files.
+
+    CHANGES RECOMMENDED: Check this to make sure it's what you want!
+    """
+    for key, values in sorted(data.items()):
+        for sample, files in sorted(values.items()):
+            yield sample, sorted(files)
+
+
+def list_files(data):
+    """List all the base files (leaf nodes) of the data dictionary."""
+    return [item[-1] for item in iterate_data(data)]
+
+
+def make_fastq_pair(base, suffix='.fq.gz'):
+    fastq1 = base + '_1' + suffix
+    fastq2 = base + '_2' + suffix
+    return fastq1, fastq2
+
+
+def list_fastq_pairs(data, suffix='.fq.gz'):
+    """Uses the base files (leaf nodes) of the data dictionary to create pairs of plausible FASTQ filenames.
+
+    CHANGES RECOMMENDED: Check this to make sure it's what you want!
+    """
+    pairs = []
+    for f in list_files(data):
+        pairs.append(make_fastq_pair(f, suffix))
+    return pairs
+
+
+def list_source_fastq_pairs(data, source_data_path, suffix='.fq.gz'):
+    source_fastq_pairs = []
+    add_path = functools.partial(os.path.join, source_data_path)
+    for fastq_pair in list_fastq_pairs(data, suffix):
+        source_fastq_pairs.append(map(add_path, fastq_pair))
+    return source_fastq_pairs
+
+
+def bwa(bwa_dir, bwa_reference, trim_adapter_dir, data_dictionary, threads=4, algorithm='MEM'):
+    """
+    Aligns reads to the reference genome with BWA.
+
+    The BWA algorithm can be specified. It must be 'MEM' or 'backtrack'.
+    """
+
+    refbase = os.path.basename(bwa_reference)
+
+    printp("""\n#\n# align the reads to the {} reference genome\n#\n""".format(refbase))
+
+    printp("""# drmr:label bwa\n""")
+    printp("""# drmr:job nodes=1 processors={} working_directory={} time_limit=4h""".format(threads, bwa_dir))
+
+    if algorithm == 'MEM':
+        for base in list_files(data_dictionary):
+            fastq1, fastq2 = make_fastq_pair(base, suffix='.trimmed.fq.gz')
+            symlink(os.path.join(trim_adapter_dir, fastq1), bwa_dir)
+            symlink(os.path.join(trim_adapter_dir, fastq2), bwa_dir)
+            printp("""bwa mem -t {threads} {bwa_reference} {fastq1} {fastq2} | samtools sort -m 1g -@ {threads} -O bam -T {base}.{refbase}.sort -o {base}.{refbase}.bam -""".format(**locals()), timed=True, ioniced=True)
+
+    elif algorithm == 'backtrack':
+        for fastq_pair in list_fastq_pairs(data_dictionary, suffix='.trimmed.fq.gz'):
+            for fastq in fastq_pair:
+                symlink(os.path.join(trim_adapter_dir, fastq), bwa_dir)
+                aln = fastq.replace('.trimmed.fq.gz', '.' + refbase + '.sai')
+                printp("""bwa aln -t {threads} -f {aln} {bwa_reference} {fastq}""".format(**locals), timed=True, ioniced=True)
+
+        printp("""\n# drmr:wait""")
+
+        #
+        # Create BAM files from the alignments. The time limit used here
+        # should cover most data, and can probably be reduced.
+        #
+        printp("""\n#\n# Create the BAM files.\n#\n""")
+        printp("""# drmr:label bwa-sampe\n""")
+        printp("""# drmr:job nodes=1 processors={} working_directory={} time_limit=24h""".format(threads, bwa_dir))
+
+        for base in list_files(data_dictionary):
+            fastq1, fastq2 = make_fastq_pair(base, suffix='.trimmed.fq.gz')
+            aln1 = fastq1.replace('.trimmed.fq.gz', '.sai')
+            aln2 = fastq2.replace('.trimmed.fq.gz', '.sai')
+            base = fastq1.replace('_1.trimmed.fq.gz', '')
+            printp("""bwa sampe {bwa_reference} {aln1} {aln2} {fastq1} {fastq2} | samtools sort -m 1g -@ {threads} -O bam -T {base}.{refbase}.sort -o {base}.{refbase}.bam""".format(**locals()), timed=True, ioniced=True)
+
+        printp("""\n# drmr:wait""")
+
+        printp("""\n#\n# Delete output files which are not needed after bwa has run\n#""")
+        printp("""\n# drmr:label clean-after-bwa""")
+
+        printp("""\n# drmr:job time_limit=00:15:00 working_directory={}""".format(BWA_DIR))
+        printp("""rm -f {}/*.sai""".format(BWA_DIR))
+
+
+#
+# End of analysis-specific functions.
+#
+
+
+# An example pipeline follows. You can delete everything after this
+# point, if it doesn't suit your needs.
+
+# CHANGES REQUIRED
+SOURCE_DATA_PATH = '/nfs/turbo/parkerlab1/lab/data/papers/ackerman-atac-rna-alpha-beta'
+BWA_REFERENCE = '/nfs/turbo/parkerlab1/lab/data/reference/human/hg19/index/bwa/0.7.12/hg19'
+
+# Allow for aligning to more than one reference
+REFBASES = [os.path.basename(BWA_REFERENCE)]
+
+MAPQ = 30
+MACS2_GENOME_SIZE = 'hs'
+MACS2_SHIFT = '-100'
+MACS2_EXTSIZE = '200'
+
+#
+# Data definitions
+#
+
+# The DATA hierarchy is used to group analysis products. It can be a
+# single level, mapping your analysis name to a single list
+# representing the sequence files, or you can make it as complex a
+# tree as necessary, e.g. organism -> cell type -> sample -> file
+
+# The hierarchy can be used to roll up analysis products from lower
+# levels. For example, the BAM files from aligning the reads in the
+# individual files can be merged into one BAM file per sample. Those
+# can then be rolled up into a file per cell type, and so on.
+#
+# The bottom of the tree controls file naming; it's assumed that each
+# string in the bottom lists is the root of a FASTQ file in
+# SOURCE_DATA_PATH, and subsequent analysis products will be named
+# after those. In the example data, the original FASTQ files
+# containing paired-end reads look like ACINAR2_SRR3048051_1.fq.gz,
+# ACINAR2_SRR3048051_2.fq.gz, and so on.
+#
+# This example comes from a moderately complex analysis (the ATAC-seq
+# data from Ackerman et al., Molecular Metabolism January 2016), with
+# several cell types, each with several samples, each of which was
+# split into two libraries and run on a different sequencer. The data
+# is available at:
+#
+# https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE76268
+#
+
+#
+# CHANGES REQUIRED
+
+# cell type / sample / file
+DATA = {
+    'ACINAR': {
+        'ACINAR2': ['ACINAR2_SRR3048051', 'ACINAR2_SRR3048052'],
+        'ACINAR3': ['ACINAR3_SRR3048053', 'ACINAR3_SRR3048054'],
+    },
+    'ALPHA': {
+        'ALPHA1': ['ALPHA1_SRR3048039', 'ALPHA1_SRR3048040'],
+        'ALPHA2': ['ALPHA2_SRR3048041', 'ALPHA2_SRR3048042'],
+        'ALPHA3': ['ALPHA3_SRR3048043', 'ALPHA3_SRR3048044'],
+    },
+    'BETA': {
+        'BETA1': ['BETA1_SRR3048045', 'BETA1_SRR3048046'],
+        'BETA2': ['BETA2_SRR3048047', 'BETA2_SRR3048048'],
+        'BETA3': ['BETA3_SRR3048049', 'BETA3_SRR3048050'],
+    }
+}
+
+
+if __name__ == '__main__':
+    print('Creating DATA_PATH {}'.format(DATA_PATH))
+    mkdir(DATA_PATH)
+
+    for fastq_pair in list_source_fastq_pairs(DATA, SOURCE_DATA_PATH, suffix='.fastq.gz'):
+        for source_file in fastq_pair:
+            dest = os.path.join(DATA_PATH, os.path.basename(source_file).replace('.fastq.gz', '.fq.gz'))
+            print('Linking original FASTQ file {} to {}'.format(source_file, dest))
+            symlink(source_file, dest)
+
+    mkdir(WORK_PATH)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp("""#!/usr/bin/env drmr -j {{ANALYSIS_BASENAME}}""")
+    printp("""# -*- mode: sh; coding: utf-8 -*-\n""")
+
+    #
+    # Run FastQC
+    #
+
+    printp("""\n#\n# run FastQC on initial data\n#""")
+    FASTQC_DIR = os.path.join(WORK_PATH, 'fastqc')
+    mkdir(FASTQC_DIR)
+    printp("""\n# drmr:label fastqc""")
+    printp("""\n# drmr:job time_limit=2h working_directory={}""".format(FASTQC_DIR))
+
+    for index, fastq_pair in enumerate(list_fastq_pairs(DATA), 1):
+        for fastq in fastq_pair:
+            symlink(os.path.join(DATA_PATH, fastq), FASTQC_DIR)
+            printp("""fastqc {}""".format(fastq), timed=True, ioniced=True)
+        if LIMIT_IO and index % 8 == 0:
+            # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
+            printp("""\n# drmr:wait""")
+
+    #
+    # Trim adapter sequence from the FASTQ files
+    #
+
+    printp("""\n#\n# trim adapter sequence from reads\n#""")
+    TRIM_ADAPTER_DIR = os.path.join(WORK_PATH, 'trim_adapters')
+    mkdir(TRIM_ADAPTER_DIR)
+    printp("""\n# drmr:label trim-adapters""")
+    printp("""\n# drmr:job time_limit=4h working_directory={}""".format(TRIM_ADAPTER_DIR))
+    for index, (fastq1, fastq2) in enumerate(list_fastq_pairs(DATA), 1):
+        symlink(os.path.join(DATA_PATH, fastq1), TRIM_ADAPTER_DIR)
+        symlink(os.path.join(DATA_PATH, fastq2), TRIM_ADAPTER_DIR)
+        printp("""cta {} {}""".format(fastq1, fastq2), timed=True, ioniced=True)
+
+        if LIMIT_IO and index % 8 == 0:
+            # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
+            printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:wait""")
+
+    #
+    # Run bwa to align the reads to the human reference genome
+    #
+    BWA_DIR = os.path.join(WORK_PATH, 'bwa')
+    mkdir(BWA_DIR)
+
+    bwa(BWA_DIR, BWA_REFERENCE, TRIM_ADAPTER_DIR, DATA, threads=4)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:job time_limit=00:15:00 working_directory={}""".format(TRIM_ADAPTER_DIR))
+    printp("""rm -f {}/*.trimmed.fq.gz""".format(TRIM_ADAPTER_DIR))
+
+    #
+    # Mark duplicates in each individual BAM file -- it's important to do
+    # this before merging them all together, so that legitimate identical
+    # alignments in different libraries aren't eliminated
+    #
+    MD_DIR = os.path.join(WORK_PATH, 'mark_duplicates')
+    mkdir(MD_DIR)
+
+    printp("""# drmr:label mark-duplicates\n""")
+    printp("""# drmr:job nodes=1 processors=2 memory=9g working_directory={} time_limit=8h""".format(MD_DIR))
+
+    for f in list_files(DATA):
+        symlink(os.path.join(BWA_DIR, f + '.bam'), MD_DIR)
+        printp("""java -Xmx8g -jar $PICARD_HOME/picard.jar MarkDuplicates I={}.bam O={}.md.bam ASSUME_SORTED=true METRICS_FILE={}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR={}""".format(f, f, f, MD_DIR), timed=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:label merge-sample-libraries\n""")
+    for sample, files in iterate_samples(DATA):
+        bams = [f + '.md.bam' for f in files]
+        printp("""samtools merge {}.md.bam {}""".format(sample, ' '.join(bams)), timed=True)
+
+    printp("""\n# drmr:wait""")
+
+    #
+    # Prune the BAM files down to properly paired and uniquely mapped
+    # autosomal alignments with good quality, and remove all duplicates
+    #
+    PRUNE_DIR = os.path.join(WORK_PATH, 'prune')
+    mkdir(PRUNE_DIR)
+
+    printp("""\n# drmr:label prune\n""")
+    printp("""# drmr:job nodes=1 processors=1 memory=4g time_limit=4h working_directory={}""".format(PRUNE_DIR))
+
+    printp("""\n#\n# index the merged BAM files with marked duplicates, so we can prune them\n#\n""")
+
+    printp("""\n# drmr:label index-sample-libraries\n""")
+    for sample, files in iterate_samples(DATA):
+        symlink(os.path.join(MD_DIR, sample + '.md.bam'), PRUNE_DIR)
+        printp("""samtools index {}.md.bam""".format(sample), timed=True)
+        for f in files:
+            symlink(os.path.join(MD_DIR, f + '.md.bam'), PRUNE_DIR)
+            printp("""samtools index {}.md.bam""".format(f), timed=True)
+
+    printp("""\n# drmr:wait""")
+
+    #
+    # samtools filters:
+    #   -f 3: keep properly paired and mapped reads
+    #   -F 4: filter out unmapped reads
+    #   -F 8: filter out unmapped mates
+    #   -F 256: filter out secondary reads
+    #   -F 1024: filter out duplicates marked by Picard above
+    #   -F 2048: filter out supplementary reads
+    #
+    printp("""\n#\n# prune the BAM files with marked duplicates down to properly paired""")
+    printp("""# and mapped primary autosomal alignments of good quality, for peak calling\n#\n""")
+
+    PRUNE_TEMPLATE = """bash -c "(export CHROMOSOMES=$(samtools view -H {}.md.bam | grep '^@SQ' | cut -f 2 | grep -v -e _ -e chrM -e chrX -e chrY -e 'VN:' | sed 's/SN://' | xargs echo); samtools view -b -h -f 3 -F 4 -F 8 -F 256 -F 1024 -F 2048 -q {} {}.md.bam $CHROMOSOMES > {}.ppmaq.nd.bam)\""""
+
+    for f in list_files(DATA):
+        printp(PRUNE_TEMPLATE.format(f, MAPQ, f, f), timed=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:label merge-pruned-sample-libraries\n""")
+    for sample, files in iterate_samples(DATA):
+        bams = [f + '.md.bam' for f in files]
+        printp("""samtools merge {}.md.bam {}""".format(sample, ' '.join(bams)), timed=True)
+
+    printp("""\n# drmr:label merge-pruned-sample-libraries\n""")
+    for sample, files in iterate_samples(DATA):
+        bams = [f + '.ppmaq.nd.bam' for f in files]
+        printp("""samtools merge {}.ppmaq.nd.bam {}""".format(sample, ' '.join(bams)), timed=True)
+
+    MACS2_DIR = os.path.join(WORK_PATH, 'macs2')
+    mkdir(MACS2_DIR)
+
+    for sample, files in iterate_samples(DATA):
+        symlink(os.path.join(PRUNE_DIR, sample + '.ppmaq.nd.bam'), MACS2_DIR)
+        for f in files:
+            symlink(os.path.join(PRUNE_DIR, f + '.ppmaq.nd.bam'), MACS2_DIR)
+
+    printp("""\n#\n# peak calling\n#""")
+    printp("""# drmr:label macs2\n""")
+    printp("""\n# drmr:job nodes=1 processors=1 memory=8g working_directory={} time_limit=4h""".format(MACS2_DIR))
+
+    printp("""\n#\n# call broad peaks (keeping dups in merged files)\n#\n""")
+
+    MACS2_BROAD_PEAK_TEMPLATE = """macs2 callpeak -t {{}}.ppmaq.nd.bam -f BAM -n {{}}.broad -g {} --nomodel --shift {} --extsize {} -B --broad --keep-dup all""".format(MACS2_GENOME_SIZE, MACS2_SHIFT, MACS2_EXTSIZE)
+
+    for sample, files in iterate_samples(DATA):
+        printp(MACS2_BROAD_PEAK_TEMPLATE.format(sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(MACS2_BROAD_PEAK_TEMPLATE.format(f, f), timed=True, ioniced=True)
+
+    printp("""\n#\n# call summits (keeping dups in the merged file)\n#\n""")
+    MACS2_SUMMIT_TEMPLATE = """macs2 callpeak -t {{}}.ppmaq.nd.bam -f BAM -n {{}}.summit -g {} --nomodel --shift {} --extsize {} -B --call-summits --keep-dup all""".format(MACS2_GENOME_SIZE, MACS2_SHIFT, MACS2_EXTSIZE)
+
+    for sample, files in iterate_samples(DATA):
+        printp(MACS2_SUMMIT_TEMPLATE.format(sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(MACS2_SUMMIT_TEMPLATE.format(f, f), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n#\n# Compress MACS2 BedGraph output\n#""")
+    printp("""\n# drmr:label compress-macs2-output\n""")
+
+    for sample, files in iterate_samples(DATA):
+        gzip_macs2_output(sample)
+        for f in files:
+            gzip_macs2_output(f)
+
+    printp("""\n# drmr:wait""")
+    printp("""\n# drmr:label blacklist\n""")
+
+    BLACKLIST_TEMPLATE = """intersectBed -a {}.broad_peaks.broadPeak.gz -b /lab/data/reference/human/hg19/annot/wgEncodeDukeMapabilityRegionsExcludable.bed.gz -v | intersectBed -a stdin -b /lab/data/reference/human/hg19/annot/wgEncodeDacMapabilityConsensusExcludable.bed.gz -v | gzip -c > {}.broad_peaks.broadPeak.noblacklist.gz"""
+
+    for sample, files in iterate_samples(DATA):
+        printp(BLACKLIST_TEMPLATE.format(sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(BLACKLIST_TEMPLATE.format(f, f), timed=True, ioniced=True)
+
+    INTERSECT_DIR = os.path.join(WORK_PATH, 'intersect')
+    mkdir(INTERSECT_DIR)
+
+    def symlink_intersect_files(root, prune_dir, macs2_dir, intersect_dir):
+        symlink(os.path.join(prune_dir, root + '.ppmaq.nd.bam'), intersect_dir)
+        symlink(os.path.join(macs2_dir, root + '.broad_peaks.broadPeak.noblacklist.gz'), intersect_dir)
+        symlink(os.path.join(macs2_dir, root + '.summit_summits.bed.gz'), intersect_dir)
+
+    for sample, files in iterate_samples(DATA):
+        symlink_intersect_files(sample, PRUNE_DIR, MACS2_DIR, INTERSECT_DIR)
+        for f in files:
+            symlink_intersect_files(f, PRUNE_DIR, MACS2_DIR, INTERSECT_DIR)
+
+    THREADS = 4
+    printp("""\n# drmr:job nodes=1 processors={} working_directory={} time_limit=4h""".format(THREADS, INTERSECT_DIR))
+    printp("""\n# drmr:label readsort\n""")
+
+    printp("""# sort the dataset by read name, so we can create BED files of fragment start/end coordinates""")
+    READSORT_TEMPLATE = """samtools sort -@ {} -n {{}}.ppmaq.nd.bam {{}}.ppmaq.nd.readsorted""".format(THREADS)
+
+    for sample, files in iterate_samples(DATA):
+        printp(READSORT_TEMPLATE.format(sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(READSORT_TEMPLATE.format(f, f), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n# count the summits in each peak""")
+    SUMMIT_INTERSECT_TEMPLATE = """intersectBed -c -a {}.broad_peaks.broadPeak.noblacklist.gz -b {}.summit_summits.bed.gz | gzip -c > {}.summit.intersections.bed.gz"""
+
+    for sample, files in iterate_samples(DATA):
+        printp(SUMMIT_INTERSECT_TEMPLATE.format(sample, sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(SUMMIT_INTERSECT_TEMPLATE.format(f, f, f), timed=True, ioniced=True)
+
+    printp("""\n#\n# overlap peaks and fragments\n#""")
+    printp("""\n#\n# The bedpe files are sorted so we can save memory with intersectBed's -sorted option.\n#""")
+    printp("""\n# drmr:label bedpe""")
+    printp("""\n# drmr:job nodes=1 processors=1 working_directory={} time_limit=4h""".format(INTERSECT_DIR))
+
+    SORT_READSORTED_TEMPLATE = """bamToBed -bedpe -i {}.ppmaq.nd.readsorted.bam | sort -T {} -k1,1 -k2,2n | gzip -c > {}.ppmaq.nd.readsorted.bedpe.gz"""
+
+    for sample, files in iterate_samples(DATA):
+        printp(SORT_READSORTED_TEMPLATE.format(sample, sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(SORT_READSORTED_TEMPLATE.format(f, f, f), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n# collect the alignments overlapping each broad peak""")
+    printp("""\n# drmr:label intersect-broad-peaks""")
+
+    OVERLAP_PEAK_TEMPLATE = """intersectBed -sorted -a {}.broad_peaks.broadPeak.noblacklist.gz -b {}.ppmaq.nd.readsorted.bedpe.gz -wb | gzip -c > {}.peak.fragments.bed.gz"""
+
+    printp("""\n# drmr:job nodes=1 processors=1 memory=8000 working_directory={} time_limit=4h""".format(INTERSECT_DIR))
+    for sample, files in iterate_samples(DATA):
+        printp(OVERLAP_PEAK_TEMPLATE.format(sample, sample, sample), timed=True, ioniced=True)
+        for f in files:
+            printp(OVERLAP_PEAK_TEMPLATE.format(f, f, f), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    ATAQC_DIR = os.path.join(WORK_PATH, 'ataqc')
+    mkdir(ATAQC_DIR)
+
+    printp("""\n#\n# run ataqc\n#""")
+    printp("""\n# drmr:label ataqc""")
+
+    def symlink_ataqc_files(root, md_dir, macs2_dir, intersect_dir, ataqc_dir):
+        symlink(os.path.join(md_dir, root + '.md.bam'), ataqc_dir)
+        symlink(os.path.join(macs2_dir, root + '.broad_peaks.broadPeak.noblacklist.gz'), ataqc_dir)
+        symlink(os.path.join(intersect_dir, root + '.peak.fragments.bed.gz'), ataqc_dir)
+
+    for sample, files in iterate_samples(DATA):
+        symlink_ataqc_files(sample, MD_DIR, MACS2_DIR, INTERSECT_DIR, ATAQC_DIR)
+        for f in files:
+            symlink_ataqc_files(f, MD_DIR, MACS2_DIR, INTERSECT_DIR, ATAQC_DIR)
+
+    ATAQC_TEMPLATE = """ataqc -p {root}.broad_peaks.broadPeak.noblacklist.gz -o {root}.peak.fragments.bed.gz -f {root}.fragment_lengths -m {root}.peak_metrics {root}.md.bam '{subject}' '{group}' > {root}.ataqc.out"""
+
+    printp("""\n# drmr:job nodes=1 memory=8g working_directory={} time_limit=4h""".format(ATAQC_DIR))
+    for sample, files in iterate_samples(DATA):
+        printp(ATAQC_TEMPLATE.format(**{'root': sample, 'subject': ANALYSIS_SUBJECT, 'group': sample}), timed=True, ioniced=True)
+        for f in files:
+            printp(ATAQC_TEMPLATE.format(**{'root': f, 'subject': ANALYSIS_SUBJECT, 'group': f}), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n#\n# plot the fragment lengths\n#""")
+    printp("""\n# drmr:label ataqc-plots""")
+    PLOT_FRAGMENT_LENGTHS_TEMPLATE = """plot_fragment_lengths.R {{}}.fragment_lengths.pdf '{} {}' {{}}.fragment_lengths""".format(ANALYSIS_SUBJECT, ANALYSIS_GROUP)
+
+    for sample, files in iterate_samples(DATA):
+        printp(PLOT_FRAGMENT_LENGTHS_TEMPLATE.format(sample, sample))
+        for f in files:
+            printp(PLOT_FRAGMENT_LENGTHS_TEMPLATE.format(f, f))
+
+    printp("""\n#\n# plot the peak metrics\n#\n""")
+    PLOT_PEAK_METRICS_TEMPLATE = """plot_peak_metrics.R {{}}.peak_metrics '{} {}'""".format(ANALYSIS_SUBJECT, ANALYSIS_GROUP)
+
+    for sample, files in iterate_samples(DATA):
+        printp(PLOT_PEAK_METRICS_TEMPLATE.format(sample, sample))
+        for f in files:
+            printp(PLOT_PEAK_METRICS_TEMPLATE.format(f, f))

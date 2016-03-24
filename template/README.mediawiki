@@ -3,15 +3,15 @@
 The analysis is configured in <code>commands</code>. That script
 should link the initial data into the analysis directory and generate
 the pipeline commands into the file <code>pipeline</code>, which is
-assumed to be a script that will be submitted to PBS with
-<code>swarm</code>.
+assumed to be a script that will be submitted to your local
+distributed resource manager with <code>drmr</code>.
 
 The generated <code>Makefile</code> has several default targets to get
 you started:
 
 * <code>make pipeline</code> will generate the <code>pipeline</code> script.
-* <code>make run</code> will submit the pipeline with <code>swarm</code>.
-* <code>make cancel_run</code> will use <code>swarm</code>'s cancel script to cancel the running pipeline.
+* <code>make run</code> will submit the pipeline with <code>drmr</code>.
+* <code>make cancel</code> will use <code>drmr</code>'s cancel script to cancel the running pipeline.
 * <code>make clean</code> will remove the pipeline script, and the entire <code>data</code> and <code>work</code> directory.
 * <code>make github_repo</code> will create a GitHub repository for the analysis and push the code there.
 * <code>make wiki_page</code> will create a new page in the Parker Lab wiki for the analysis.
