@@ -1,6 +1,6 @@
 APP = mka
 CAPAPP = MKA
-VERSION = 0.1.2
+VERSION = 0.5.0
 MODULEFILES_ROOT = /lab/sw/modulefiles
 MODULES_ROOT = /lab/sw/modules
 PREFIX = $(MODULES_ROOT)/$(APP)/$(VERSION)
@@ -25,8 +25,9 @@ export MODULEFILE_TEMPLATE
 
 
 install:
-	@mkdir -p $(PREFIX)/bin $(PREFIX)/template
-	@install -m 0755 bin/* $(PREFIX)/bin
+	mkdir -p $(PREFIX)/bin $(PREFIX)/template
+	install -m 0755 bin/* $(PREFIX)/bin
+	sed -i -e "s/{{VERSION}}/${VERSION}/g" $(PREFIX)/bin/mka
 	@rsync -a template/ $(PREFIX)/template
 	@find $(PREFIX)/template -type d -exec chmod 755 {} \;
 	@find $(PREFIX)/template -type f -exec chmod 644 {} \;

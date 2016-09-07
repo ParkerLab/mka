@@ -20,7 +20,7 @@ $(ANALYSIS_PATH)/pipeline: $(CONTROL_PATH)/commands
 	@mkdir -p $(ANALYSIS_PATH) && cd $(ANALYSIS_PATH) && chmod +x $(CONTROL_PATH)/commands && $(CONTROL_PATH)/commands
 
 run: $(ANALYSIS_PATH)/pipeline
-	@cd $(WORK_PATH) && drmr -j $(ANALYSIS_NAME) $(ANALYSIS_PATH)/pipeline
+	@cd $(WORK_PATH) && drmr -j $(ANALYSIS_NAME) --mail-at-finish --mail-on-error $(ANALYSIS_PATH)/pipeline
 
 $(CANCEL_SCRIPT):
 	@mkdir -p `dirname $(CANCEL_SCRIPT)` && echo 'printf "\nThe pipeline has not been started in the usual way.\nYou will have to delete any running jobs manually.\n\n"' > $(CANCEL_SCRIPT)

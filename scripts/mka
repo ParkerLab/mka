@@ -1,0 +1,468 @@
+#!/usr/bin/env python
+
+#
+# mka: make analysis
+#
+# Creates a control directory for an analysis, ready for customization
+# and publication to GitHub and our wiki.
+#
+
+from __future__ import print_function
+
+import argparse
+import csv
+import json
+import logging
+import os.path
+import pkgutil
+import re
+import subprocess
+import sys
+import textwrap
+
+import dateparser
+import jinja2
+
+
+PROGRAM = 'mka'
+PROGRAM_VERSION = '0.5.0'
+
+LIBRARY_FILENAME_PATTERN = re.compile(
+    '^(?P<sample>.*?)'
+    '___(?P<library>.*?)'
+    '(?:___(?P<readgroup>.*?))?'  # optional
+    '(?:___(?P<description>.*?))?'  # optional
+    '\.(?P<pair_index>\d)*\.'
+)
+
+SUPPORTED_ANALYSES = [
+    'atac-seq',
+    'rna-seq',
+]
+
+ANALYSIS_SPECIFIC_LIBRARY_OPTIONS = {
+    'atac-seq': {},
+    'rna-seq': {
+        'strand': {
+            'choices': ['fr-unstranded', 'fr-firststrand', 'fr-secondstrand'],
+            'default': 'fr-firststrand',
+            'prompt': 'Library type',
+        }
+    }
+}
+
+TEMPLATES = [
+    '.gitignore',
+    'Makefile',
+    'README.mediawiki',
+    'commands',
+]
+
+URL_PREFIXES = {
+    'SRR': 'http://www.ncbi.nlm.nih.gov/sra/?term=',
+    'GSM': 'http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc='
+}
+
+
+class MissingTemplate(Exception):
+    def __init__(self, template):
+        self.template = template
+
+    def __str__(self):
+        return 'Template not found: {}'.format(self.template)
+
+
+# yuck. Looking forward to being able to drop Python 2 someday.
+try:
+    input = raw_input
+except:
+    pass
+
+
+def first(seq):
+    return seq and next(iter(seq)) or None
+
+
+def read_custom_template(path):
+    content = None
+    try:
+        content = open(path, 'rb').read()
+    except:
+        pass
+
+    return content
+
+
+def find_template(template, analysis_type=None):
+    """
+    Search mka template directories for the given template.
+
+    Searches the directory in the environment variable MKA_TEMPLATES,
+    if it exists, then the default templates supplied with the mka
+    package.
+
+    Returns the content of the template, or raises MissingTemplate.
+    """
+
+    if analysis_type:
+        sources = ['{}.{}'.format(template, analysis_type), template]
+    else:
+        sources = [template]
+
+    custom_template_directory = os.environ.get('{}_TEMPLATES'.format(PROGRAM))
+
+    templates = []
+    for source in sources:
+        if custom_template_directory:
+            templates.append(read_custom_template(os.path.join(custom_template_directory, source)))
+
+        try:
+            templates.append(pkgutil.get_data(PROGRAM, 'templates/{}'.format(source)))
+        except:
+            pass
+
+    # turn the bytes content into strings
+    templates = [t.decode('UTF=8') for t in templates if t]
+
+    if not templates:
+        raise MissingTemplate(template)
+
+    return first(templates)
+
+
+def write_template(template_context, template, destination_directory, analysis_type=None):
+    template_content = find_template(template, analysis_type)
+    template_environment = jinja2.Environment()
+    try:
+        t = template_environment.from_string(template_content)
+        output = t.render(**template_context)
+        destination_filename = os.path.join(destination_directory, template)
+        with open(destination_filename, 'w') as destination:
+            destination.write(output)
+    except jinja2.exceptions.TemplateSyntaxError as e:
+        logging.fatal('Error at line {} in template {}: {}'.format(e.lineno, template, e))
+
+
+def write_templates(template_context, destination_directory, analysis_type=None):
+    for template in TEMPLATES:
+        write_template(template_context, template, destination_directory, analysis_type)
+
+
+def parse_library_filename(library_file):
+    sample = library = readgroup = description = pair_index = ''
+    base = os.path.basename(library_file)
+    m = LIBRARY_FILENAME_PATTERN.match(base)
+    if m:
+        sample = m.group('sample')
+        library = m.group('library')
+
+        # Defaulting the read group to 1 is OK even if the BAMs are
+        # merged, because in the templates, the read group headers are
+        # constructed by concatenating the library and the read group
+        readgroup = m.group('readgroup') or 1
+
+        description = (m.group('description') or '').replace('%20', ' ')
+        pair_index = m.group('pair_index') or ''
+
+    return {
+        'sample': sample,
+        'library': library,
+        'readgroup': readgroup,
+        'description': description,
+        'pair_index': pair_index
+    }
+
+
+def read_runinfo(filename):
+    """
+    Reads the CSV containing run info.
+
+    The UM DNA Sequencing Core supplies a CSV file with each run's
+    results. They're usually named Run_<number>_<investigator>.csv.
+
+    The files contain sample IDs, lanes, barcodes, projects (usually
+    just the investigator's uniqname, unfortunately) and descriptions
+    of each sample, as supplied when submitted for sequencing.
+    """
+
+    common_info = {
+        'sequencing_center': 'UM DNA Sequencing Core',
+    }
+
+    illumina_applications = ['HiSeq']
+    indata = False
+    libraries = []
+    with open(filename) as f:
+        for line in f:
+            line = line.strip()
+
+            if indata:
+                libraries.append(line)
+            else:
+                if line.startswith('Date,'):
+                    sequencing_date = line.split(',')[1]
+                    sequencing_date = dateparser.parse(sequencing_date, settings={'PREFER_DATES_FROM': 'past'})
+                    if sequencing_date:
+                        common_info['sequencing_date'] = sequencing_date.date().isoformat()
+
+                if line.startswith('Application,') and any([app in line for app in illumina_applications]):
+                    common_info['sequencing_platform'] = 'ILLUMINA'
+
+                if line.startswith('[Data]'):
+                    indata = True
+
+    info = {}
+    reader = csv.DictReader(libraries, dialect='excel')
+    for library in reader:
+        id = library['Sample_ID'].replace('Sample_', '')
+        info[id] = {
+            'sample': id,
+            'library': id,
+            'description': library.get('Description', '')
+        }
+        info[id].update(common_info)
+
+    return info
+
+
+def get_metadata(metadata, attribute, prompt, transform=str):
+    metadata[attribute] = transform(input(prompt.format(metadata[attribute])) or metadata[attribute])
+
+
+def upper(s):
+    return str(s).upper()
+
+
+def describe_libraries(library_files, analysis_type=None, interactive=False, defaults=None, run_info=None):
+    libraries = {}
+
+    metadata = {
+        'library': '',
+        'sample': '',
+        'readgroup': '',
+        'pair_index': '',
+        'url': '',
+        'sequencing_center': '',
+        'sequencing_date': '',
+        'sequencing_platform': '',
+        'sequencing_platform_model': '',
+        'reference_genome': '',
+        'description': '',
+        'analysis_specific_options': {},
+    }
+
+    run_info_metadata = {}
+    if run_info:
+        run_info_metadata.update({k: v for k, v in read_runinfo(run_info).items() if k in metadata and v})
+
+    if defaults:
+        default_details = json.load(open(defaults))
+        metadata.update({k: v for k, v in default_details.items() if k in metadata and v})
+
+    for library_file in library_files:
+        filename_metadata = parse_library_filename(library_file)
+
+        if run_info_metadata:
+            library_run_info_metadata = run_info_metadata[filename_metadata['sample']]
+            if library_run_info_metadata:
+                metadata.update({k: v for k, v in library_run_info_metadata.items() if k in metadata and v})
+
+        metadata.update({k: v for k, v in filename_metadata.items() if k in metadata and v})
+        if interactive:
+            print('Metadata for library file {}:'.format(library_file))
+            get_metadata(metadata, 'sample', '  sample ({}): ')
+            get_metadata(metadata, 'library', '  library ({}): ')
+            get_metadata(metadata, 'readgroup', '  read group ({}): ')
+            get_metadata(metadata, 'pair_index', '  pair index -- 1 or 2 for paired end libraries, or blank ({}): ')
+
+        if interactive or not metadata.get('reference_genome'):
+            get_metadata(metadata, 'reference_genome', '  reference genome, e.g. hg19 ({}): ')
+            while not metadata['reference_genome']:
+                get_metadata(metadata, 'reference_genome', '  reference genome is required: ')
+
+        if not metadata['url']:
+            if metadata['library'][:3] in URL_PREFIXES:
+                metadata['url'] = URL_PREFIXES[metadata['library'][:3]] + metadata['library']
+            elif metadata['sample'][:3] in URL_PREFIXES:
+                metadata['url'] = URL_PREFIXES[sample[:3]] + metadata['sample']
+
+        if interactive:
+            get_metadata(metadata, 'description', '  description ({}): ')
+            get_metadata(metadata, 'url', """  URL -- perhaps the library's SRA or GEO URL ({}): """)
+            get_metadata(metadata, 'sequencing_platform', '  sequencing platform, e.g. ILLUMINA ({}): ', upper)
+            get_metadata(metadata, 'sequencing_center', '  sequencing center ({}): ')
+            get_metadata(metadata, 'sequencing_date', '  sequencing date ({}): ')
+
+        date_ok = False
+        sequencing_date = metadata['sequencing_date']
+        while sequencing_date and not date_ok:
+            sequencing_date = dateparser.parse(sequencing_date, settings={'PREFER_DATES_FROM': 'past'})
+            if sequencing_date:
+                metadata['sequencing_date'] = sequencing_date.date().isoformat()
+                date_ok = True
+            else:
+                logging.error('  Sorry, I could not interpret that date.')
+                get_metadata(metadata, 'sequencing_date', '  sequencing date ({}): ')
+
+        if interactive:
+            for option, config in ANALYSIS_SPECIFIC_LIBRARY_OPTIONS[analysis_type].items():
+                analysis_specific_options = metadata['analysis_specific_options']
+                value = analysis_specific_options.get(option, '')
+                prompt = '  {} {} ({}): '.format(
+                    config['prompt'],
+                    'choices' in config and '[{}]'.format(', '.join(config['choices'])) or '',
+                    value or config.get('default', '')
+                )
+                value = input(prompt) or analysis_specific_options.get(option) or config.get('default')
+                if 'choices' in config:
+                    while value not in config['choices']:
+                        value = input(prompt)
+
+                metadata['analysis_specific_options'][option] = value
+
+        library = metadata['library']
+        if library in libraries:
+            if libraries[library]['sample'] != metadata['sample']:
+                raise ValueError('Library {} seems to belong to multiple samples in {}. Check your input.'.format(library, json.dumps(libraries, sort_keys=True, indent=4)))
+        else:
+            libraries[library] = {k: v for k, v in metadata.items() if k not in ['pair_index', 'readgroup']}
+            libraries[library]['readgroups'] = {}  # read group ID -> list of files
+
+        readgroups = libraries[library]['readgroups']
+        if metadata['readgroup'] in readgroups:
+            readgroups[metadata['readgroup']].append(library_file)
+        else:
+            readgroups[metadata['readgroup']] = [library_file]
+
+        logging.debug('\nmetadata: {}'.format(json.dumps(metadata, sort_keys=True, indent=4)))
+        logging.debug('\nLibraries: {}'.format(json.dumps(libraries, sort_keys=True, indent=4)))
+
+    return json.dumps(libraries, sort_keys=True, indent=4)
+
+
+def initialize_git_repo(directory):
+    os.chdir(directory)
+    if not os.path.exists('.git'):
+        git_email = ''
+        try:
+            git_email = subprocess.check_output(['git', 'config', 'user.email'])
+        except:
+            pass
+
+        while not git_email:
+            git_email = input('Enter the email address to use when committing to this repo: ')
+
+        subprocess.check_output(['git', 'init'])
+        subprocess.check_output(['git', 'config', '--local', 'user.email', git_email])
+        subprocess.check_output(['git', 'add', '-A'])
+        subprocess.check_output(['git', 'commit', '-m', 'initial commit'])
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        prog=PROGRAM,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent("""
+
+        Given one or more DNA library files, creates an analysis pipeline from
+        a template. Current templates support ATAC-seq and RNA-seq pipelines.
+
+        You will be asked to describe each library file. All required metadata
+        except the reference genome can be inferred if the files are named
+        like this:
+
+          sample___library___readgroup___description.read_pair_index.fastq.gz
+
+        For example, this...
+
+          GSM1155957___SRR891268___1___GM12878_ATACseq_50k_Rep1.1.fastq.gz
+
+        ... would be interpreted as sample GSM1155957, library SRR891268, read
+        group 1, described as GM12878_ATACseq_50k_Rep1, containing the first
+        reads of a paired-end library.
+
+        If samples and libraries look like GEO identifiers, then URLs for them
+        can also be inferred and recorded.
+
+        When using bwa or STAR to align reads, the library metadata will be
+        used to add read groups to their output.
+
+        You can also supply default metadata for the entire experiment with
+        the --library-defaults option.
+
+        If the data came from the UM DNA Sequencing Core, metadata for the
+        libraries can also be parsed from the run info CSV files they supply.
+
+        The precedence of metadata is: run info < library defaults < filenames.
+
+        """)
+    )
+
+    parser.add_argument('-v', '--verbose', action='store_true', help='Talk more.')
+    parser.add_argument('--version', action='version', version=PROGRAM_VERSION)
+
+    parser.add_argument('-a', '--analysis-path', help='The directory where the analysis will run. If not specified, it will run in the control directory.')
+    parser.add_argument('-d', '--description', help='A description of the analysis.')
+    parser.add_argument('-i', '--interactive', action='store_true', help='Prompt for library metadata, instead of just inferring from filenames.')
+    parser.add_argument('-l', '--library-defaults', help='A JSON file containing default metadata to use for all libraries. This will override metadata parsed from the file supplied with the --run-info option.')
+    parser.add_argument('-t', '--analysis-type', choices=SUPPORTED_ANALYSES, help='The type of pipeline to create.')
+    parser.add_argument('-n', '--name', required=False, help="""The name for the analysis and its wiki page (default: derived from the control directory).""")
+    parser.add_argument('-r', '--run-info', help='The path to a "run info" CSV file included with results from the UM DNA Sequencing Core. Library metadata will be supplemented with the run info. This metadata will be overridden with any supplied with --library-defaults or parsed from library FASTQ files.')
+    parser.add_argument('control_path', help='The directory for the control files.')
+    parser.add_argument('libraries', metavar='library', nargs='+', help='One or more FASTQ files containing sequenced libraries.')
+
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+
+    args = parse_arguments()
+
+    loglevel = args.verbose and logging.DEBUG or logging.INFO
+    logging.basicConfig(level=loglevel, format='%(message)s')
+
+    control_path = os.path.abspath(args.control_path)
+    analysis_path = args.analysis_path and os.path.abspath(args.analysis_path) or control_path
+
+    libraries = []
+    for library in args.libraries:
+        library = os.path.abspath(library)
+        if os.path.exists(library):
+            libraries.append(library)
+        else:
+            logging.fatal('File not found: {}'.format(library))
+            sys.exit(1)
+
+    if not libraries:
+        logging.fatal('Please supply at least one FASTQ file to analyze.')
+        sys.exit(1)
+
+    if os.path.exists(control_path):
+        if not os.path.isfile(os.path.join(control_path, 'commands')):
+            logging.fatal('Control path {} already exists, but does not look like it was generated by mka.'.format(control_path))
+            sys.exit(1)
+
+    analysis_name = args.name or os.path.basename(control_path)
+    template_context = {
+        'DESCRIPTION': args.description.replace('"', r'\"').replace("'", "\'"),
+        'CONTROL_PATH': control_path,
+        'ANALYSIS_PATH': analysis_path,
+        'ANALYSIS_NAME': analysis_name,
+        'ANALYSIS_WIKINAME': analysis_name.title(),
+        'LIBRARIES': describe_libraries(libraries, args.analysis_type, args.interactive, args.library_defaults, args.run_info)
+    }
+
+    if not os.path.exists(control_path):
+        os.makedirs(control_path, 0o0755)
+
+    write_templates(template_context, control_path, args.analysis_type)
+
+    os.chmod(os.path.join(control_path, 'commands'), 0o0755)
+
+    try:
+        initialize_git_repo(control_path)
+    except subprocess.CalledProcessError as e:
+        logging.fatal('Could not initialize git repository: {}'.format(e))
+        sys.exit(1)
+
+    logging.info('\nYour analysis is ready in {}'.format(control_path))
