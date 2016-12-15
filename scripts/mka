@@ -7,9 +7,8 @@
 # and publication to GitHub and our wiki.
 #
 
-from __future__ import print_function
-
 import argparse
+import curses
 import csv
 import json
 import logging
@@ -62,6 +61,28 @@ URL_PREFIXES = {
     'SRR': 'http://www.ncbi.nlm.nih.gov/sra/?term=',
     'GSM': 'http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc='
 }
+
+
+class ColoringStreamHandler(logging.StreamHandler):
+    LEVEL_COLORS = {
+        logging.DEBUG: '\033[34m',
+        logging.ERROR: '\033[31m',
+        logging.FATAL: '\033[31m',
+        logging.WARN: '\033[33m',
+    }
+
+    def emit(self, record):
+        tty = os.isatty(self.stream.fileno())
+        if tty:
+            color = self.LEVEL_COLORS.get(record.levelno, None)
+            if color:
+                self.stream.write(color)
+
+        self.stream.write(self.format(record))
+        self.stream.write('\n')
+        if tty:
+            self.stream.write('\033[0m')
+        self.flush()
 
 
 class MissingTemplate(Exception):
@@ -233,7 +254,7 @@ def upper(s):
     return str(s).upper()
 
 
-def describe_libraries(library_files, analysis_type=None, interactive=False, defaults=None, run_info=None):
+def describe_libraries(library_files, analysis_type=None, interactive=False, defaults=None, run_info_file=None):
     libraries = {}
 
     metadata = {
@@ -251,9 +272,10 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         'analysis_specific_options': {},
     }
 
-    run_info_metadata = {}
-    if run_info:
-        run_info_metadata.update({k: v for k, v in read_runinfo(run_info).items() if k in metadata and v})
+    run_info = {}
+    if run_info_file:
+        logging.debug('Reading sequencing run information from {}'.format(run_info_file))
+        run_info = read_runinfo(run_info_file)
 
     if defaults:
         default_details = json.load(open(defaults))
@@ -262,23 +284,23 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
     for library_file in library_files:
         filename_metadata = parse_library_filename(library_file)
 
-        if run_info_metadata:
-            library_run_info_metadata = run_info_metadata[filename_metadata['sample']]
-            if library_run_info_metadata:
-                metadata.update({k: v for k, v in library_run_info_metadata.items() if k in metadata and v})
+        if run_info:
+            library_run_info = run_info[filename_metadata['sample']]
+            if library_run_info:
+                metadata.update({k: v for k, v in library_run_info.items() if k in metadata and v})
 
         metadata.update({k: v for k, v in filename_metadata.items() if k in metadata and v})
         if interactive:
-            print('Metadata for library file {}:'.format(library_file))
+            print('\nPlease supply metadata for library file {}:'.format(library_file))
             get_metadata(metadata, 'sample', '  sample ({}): ')
             get_metadata(metadata, 'library', '  library ({}): ')
             get_metadata(metadata, 'readgroup', '  read group ({}): ')
             get_metadata(metadata, 'pair_index', '  pair index -- 1 or 2 for paired end libraries, or blank ({}): ')
-
-        if interactive or not metadata.get('reference_genome'):
             get_metadata(metadata, 'reference_genome', '  reference genome, e.g. hg19 ({}): ')
+
+        if not metadata.get('reference_genome'):
             while not metadata['reference_genome']:
-                get_metadata(metadata, 'reference_genome', '  reference genome is required: ')
+                get_metadata(metadata, 'reference_genome', '  Please specify the reference genome: ')
 
         if not metadata['url']:
             if metadata['library'][:3] in URL_PREFIXES:
@@ -334,9 +356,7 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         else:
             readgroups[metadata['readgroup']] = [library_file]
 
-        logging.debug('\nmetadata: {}'.format(json.dumps(metadata, sort_keys=True, indent=4)))
-        logging.debug('\nLibraries: {}'.format(json.dumps(libraries, sort_keys=True, indent=4)))
-
+    logging.debug('\nLibraries: {}'.format(json.dumps(libraries, sort_keys=True, indent=4)))
     return json.dumps(libraries, sort_keys=True, indent=4)
 
 
@@ -418,8 +438,13 @@ if __name__ == '__main__':
 
     args = parse_arguments()
 
-    loglevel = args.verbose and logging.DEBUG or logging.INFO
-    logging.basicConfig(level=loglevel, format='%(message)s')
+    root = logging.getLogger()
+    root.setLevel(args.verbose and logging.DEBUG or logging.INFO)
+
+    handler = ColoringStreamHandler()
+    handler.setFormatter(logging.Formatter(fmt='%(message)s'))
+
+    root.addHandler(handler)
 
     control_path = os.path.abspath(args.control_path)
     analysis_path = args.analysis_path and os.path.abspath(args.analysis_path) or control_path

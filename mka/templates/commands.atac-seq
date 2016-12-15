@@ -41,7 +41,7 @@ AUTOSOMAL_REFERENCES = {
 
 EXCLUDED_REGIONS = {
     'dm3': map(prefix_reference_root, ['fly/dm3/annot/dm3-blacklist.bed.gz']),
-    'hg19': map(prefix_reference_root, ['human/hg19/annot/wgEncodeDukeMapabilityRegionsExcludable.bed.gz', '/lab/human/hg19/annot/wgEncodeDacMapabilityConsensusExcludable.bed.gz']),
+    'hg19': map(prefix_reference_root, ['human/hg19/annot/wgEncodeDukeMapabilityRegionsExcludable.bed.gz', 'human/hg19/annot/wgEncodeDacMapabilityConsensusExcludable.bed.gz']),
     'mm9': map(prefix_reference_root, ['mouse/mm9/annot/mm9-blacklist.bed.gz']),
     'mm10': map(prefix_reference_root, ['mouse/mm10/annot/mm10.blacklist.bed.gz'])
 }
@@ -194,25 +194,25 @@ def rename_fastq(fastq, suffix=''):
 def iterate_library_source_files(library_name):
     """Generates a list of the library's original files."""
     library = LIBRARIES[library_name]
-    for rg, files in library['readgroups'].items():
-        for f in files:
+    for rg, files in sorted(library['readgroups'].items()):
+        for f in sorted(files):
             yield f
 
 
 def iterate_all_source_files():
-    return itertools.chain(*[iterate_library_source_files(library_name) for library_name in LIBRARIES.keys()])
+    return itertools.chain(*[iterate_library_source_files(library_name) for library_name in sorted(LIBRARIES.keys())])
 
 
 def iterate_library_files(library_name):
     """Generates a list of the library's files in DATA_PATH."""
     library = LIBRARIES[library_name]
-    for rg, files in library['readgroups'].items():
-        for f in files:
+    for rg, files in sorted(library['readgroups'].items()):
+        for f in sorted(files):
             yield os.path.join(DATA_PATH, os.path.basename(f))
 
 
 def iterate_all_files():
-    return itertools.chain(*[iterate_library_files(library_name) for library_name in LIBRARIES.keys()])
+    return itertools.chain(*[iterate_library_files(library_name) for library_name in sorted(LIBRARIES.keys())])
 
 
 def make_read_group_file(library_name, readgroup, suffix=''):
@@ -242,7 +242,7 @@ def make_read_group_header(library, id):
         'DS': library['description'],
     }
 
-    header = """@RG\\t{}""".format('\\t'.join('{}:{}'.format(k, v) for k, v in read_group_components.items() if v))
+    header = """@RG\\t{}""".format('\\t'.join('{}:{}'.format(k, v) for k, v in sorted(read_group_components.items()) if v))
 
     return header
 
@@ -276,11 +276,11 @@ def trim_adapters():
     printp("""\n# drmr:job time_limit=4h working_directory={}""".format(TRIM_ADAPTER_DIR))
 
     index = 0
-    for name, library in LIBRARIES.items():
-        for rg, files in library['readgroups'].items():
-            for f in files:
+    for name, library in sorted(LIBRARIES.items()):
+        for rg, files in sorted(library['readgroups'].items()):
+            for f in sorted(files):
                 symlink(os.path.join(DATA_PATH, os.path.basename(f)), TRIM_ADAPTER_DIR)
-            bases = [os.path.basename(f) for f in files]
+            bases = [os.path.basename(f) for f in sorted(files)]
             printp("""cta {} {}""".format(*bases), timed=True, ioniced=True)
             index += 1
 
@@ -303,12 +303,12 @@ def bwa(threads=4, algorithm='MEM', time_limit='8h'):
     printp("""# drmr:job nodes=1 processors={} working_directory={} time_limit={}""".format(threads, BWA_DIR, time_limit))
 
     backtrack_readgroups = []
-    for library_name, library in LIBRARIES.items():
+    for library_name, library in sorted(LIBRARIES.items()):
         reference_genome = library['reference_genome']
         bwa_reference = BWA_REFERENCES[reference_genome]
 
-        for rg, files in library['readgroups'].items():
-            fastq_files = [rename_fastq('.trimmed.fq.gz', os.path.basename(f)) for f in files]
+        for rg, files in sorted(library['readgroups'].items()):
+            fastq_files = sorted([rename_fastq('.trimmed.fq.gz', os.path.basename(f)) for f in files])
             for f in fastq_files:
                 symlink(os.path.join(TRIM_ADAPTER_DIR, f), BWA_DIR)
 
@@ -381,8 +381,8 @@ def mark_duplicates():
     printp("""# drmr:label mark-duplicates\n""")
     printp("""# drmr:job nodes=1 processors=2 memory=8g working_directory={} time_limit=8h""".format(MD_DIR))
 
-    for library_name, library in LIBRARIES.items():
-        for rg in library['readgroups'].keys():
+    for library_name, library in sorted(LIBRARIES.items()):
+        for rg in sorted(library['readgroups'].keys()):
             input_bam = make_read_group_file(library_name, rg, '.bam')
             output_bam = make_read_group_file(library_name, rg, '.md.bam')
             symlink(os.path.join(BWA_DIR, input_bam), MD_DIR)
@@ -392,8 +392,8 @@ def mark_duplicates():
     printp("""\n#\n# index the BAM files with marked duplicates, for pruning\n#\n""")
     printp("""\n# drmr:label index-md-bams\n""")
 
-    for library_name, library in LIBRARIES.items():
-        for rg in library['readgroups'].keys():
+    for library_name, library in sorted(LIBRARIES.items()):
+        for rg in sorted(library['readgroups'].keys()):
             bam = make_read_group_file(library_name, rg, '.md.bam')
             printp("""samtools index {bam}""".format(**locals()), timed=True)
 
@@ -409,8 +409,8 @@ def prune(mapq=30):
     printp("""\n# drmr:label prune\n""")
     printp("""# drmr:job nodes=1 processors=1 memory=4g time_limit=4h working_directory={}""".format(PRUNE_DIR))
 
-    for library_name, library in LIBRARIES.items():
-        for rg in library['readgroups'].keys():
+    for library_name, library in sorted(LIBRARIES.items()):
+        for rg in sorted(library['readgroups'].keys()):
             symlink(os.path.join(MD_DIR, make_read_group_file(library_name, rg, '.md.bam')), PRUNE_DIR)
             symlink(os.path.join(MD_DIR, make_read_group_file(library_name, rg, '.md.bam.bai')), PRUNE_DIR)
 
@@ -428,9 +428,9 @@ def prune(mapq=30):
 
     PRUNE_TEMPLATE = """samtools view -b -h -f 3 -F 4 -F 8 -F 256 -F 1024 -F 2048 -q {mapq} {input_bam} {autosomes} > {output_bam}"""
 
-    for library_name, library in LIBRARIES.items():
+    for library_name, library in sorted(LIBRARIES.items()):
         autosomes = ' '.join(AUTOSOMAL_REFERENCES[library['reference_genome']])
-        for rg in library['readgroups'].keys():
+        for rg in sorted(library['readgroups'].keys()):
             input_bam = make_read_group_file(library_name, rg, '.md.bam')
             output_bam = make_read_group_file(library_name, rg, '.pruned.bam')
             printp(PRUNE_TEMPLATE.format(**locals()), timed=True)
@@ -444,8 +444,9 @@ def compress_macs2_output(prefix, ioniced=True):
 
 
 def exclude_blacklisted_peaks(prefix, reference_genome):
-    exclude_commands = ' | '.join(['intersectBed -a stdin -b {} -v'.format(erf) for erf in EXCLUDED_REGIONS[reference_genome]])
-    printp("""zcat {prefix}.broad_peaks.broadPeak.gz | {exclude_commands} | gzip -c > {prefix}.broad_peaks.broadPeak.noblacklist.gz""".format(**locals()))
+    if reference_genome in EXCLUDED_REGIONS:
+        exclude_commands = ' | '.join(['intersectBed -a stdin -b {} -v'.format(erf) for erf in EXCLUDED_REGIONS[reference_genome]])
+        printp("""zcat {prefix}.broad_peaks.broadPeak.gz | {exclude_commands} | gzip -c > {prefix}.broad_peaks.broadPeak.noblacklist.gz""".format(**locals()))
 
 
 def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libraries=False, call_samples=False):
@@ -465,7 +466,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
     printp("""# drmr:label macs2-readgroups\n""")
     for library_name, library in sorted(LIBRARIES.items()):
         macs2_genome_size = MACS2_GENOME_SIZES[library['reference_genome']]
-        for rg in library['readgroups'].keys():
+        for rg in sorted(library['readgroups'].keys()):
             input_bam = make_read_group_file(library_name, rg, '.pruned.bam')
             prefix = make_read_group_file(library_name, rg)
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
@@ -563,31 +564,32 @@ def ataqv(use_autosomal_reference_files=False):
 
     printp("""\n# drmr:job nodes=1 memory=8g working_directory={} time_limit=4h""".format(ATAQV_DIR))
 
-    for library_name, library in LIBRARIES.items():
+    for library_name, library in sorted(LIBRARIES.items()):
         if use_autosomal_reference_files:
             autosomal_reference_filename = os.path.join(ATAQV_DIR, '{}.arf'.format(library_name))
             with open(autosomal_reference_filename, 'w') as arf:
-                for ar in AUTOSOMAL_REFERENCES[library['reference_genome']]:
+                for ar in sorted(AUTOSOMAL_REFERENCES[library['reference_genome']]):
                     arf.write(ar)
                     arf.write('\n')
 
-        for rg in library['readgroups'].keys():
+        for rg in sorted(library['readgroups'].keys()):
             alignments = make_read_group_file(library_name, rg, '.md.bam')
             peaks = make_read_group_file(library_name, rg, '.broad_peaks.broadPeak.gz')
             symlink(os.path.join(MD_DIR, alignments), ATAQV_DIR)
             symlink(os.path.join(MACS2_DIR, peaks), ATAQV_DIR)
 
-            ataqv_options = ["""{} '{}'""".format(k, v) for k, v in {
+            ataqv_options = ["""{} '{}'""".format(k, v) for k, v in sorted({
                 '--description': DESCRIPTION,
                 '--library-description': library.get('description'),
                 '--url': library.get('url'),
-            }.items() if v]
+            }.items()) if v]
 
             if use_autosomal_reference_files:
                 ataqv_options.append('--autosomal-reference-file {}'.format(autosomal_reference_filename))
 
-            for excluded_region_file in EXCLUDED_REGIONS[library['reference_genome']]:
-                ataqv_options.append('--excluded-region-file {}'.format(excluded_region_file))
+            if library['reference_genome'] in EXCLUDED_REGIONS:
+                for excluded_region_file in sorted(EXCLUDED_REGIONS[library['reference_genome']]):
+                    ataqv_options.append('--excluded-region-file {}'.format(excluded_region_file))
 
             ataqv_options = ' '.join(ataqv_options)
 

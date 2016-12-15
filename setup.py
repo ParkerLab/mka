@@ -29,7 +29,10 @@ setup(
     package_data={
         'mka': ['templates/*']
     },
-    scripts=['scripts/mka'],
+    scripts=[
+        'scripts/mka',
+        'scripts/screname'
+    ],
     include_package_data=True,
     install_requires=requirements,
     license="GPLv3+",

@@ -146,16 +146,16 @@ def iterate_all_files():
 
 
 def library_reference_genomes():
-    return set(library['reference_genome'] for library_name, library in LIBRARIES.items())
+    return sorted(list(set(library['reference_genome'] for library_name, library in sorted(LIBRARIES.items()))))
 
 
 def libraries_by_genome():
     libraries = {}
     for genome in library_reference_genomes():
-        libraries[genome] = [library for library_name, library in LIBRARIES.items() if library['reference_genome'] == genome]
+        libraries[genome] = [library for library_name, library in sorted(LIBRARIES.items()) if library['reference_genome'] == genome]
 
     # return genome, libraries for each genom
-    return libraries.items()
+    return sorted(libraries.items())
 
 
 def make_read_group_path(library_name, readgroup, suffix=''):
@@ -185,7 +185,7 @@ def make_read_group_header(library, id):
         'DS': library['description'],
     }
 
-    header = """@RG\\t{}""".format('\\t'.join('{}:{}'.format(k, v) for k, v in read_group_components.items() if v))
+    header = """@RG\\t{}""".format('\\t'.join('{}:{}'.format(k, v) for k, v in sorted(read_group_components.items()) if v))
 
     return header
 
@@ -219,6 +219,7 @@ def star(command_template=None, threads=4, memory=32):
         gtf = os.path.join(star_reference, 'annotation.gtf')
 
         for rg, files in sorted(library['readgroups'].items()):
+            files = sorted(files)
             star_dir = os.path.join(STAR_DIR, make_read_group_path(library_name, rg))
             mkdir(star_dir)
 
@@ -272,7 +273,7 @@ def qorts(command_template=None, threads=4, memory=9):
     with open(decoder_filename, 'w') as decoder:
         decoder.write('sample.ID\n')
         for library_name, library in LIBRARIES.items():
-            for rg, files in library['readgroups'].items():
+            for rg in sorted(library['readgroups'].keys()):
                 read_group_dir = make_read_group_path(library_name, rg)
                 decoder.write('{}\n'.format(read_group_dir))
 
@@ -291,10 +292,10 @@ def qorts_wig2bigwig(command_template=None, memory=1):
 
     printp('\n# drmr:label qorts-wig2bigwig')
 
-    for library_name, library in LIBRARIES.items():
+    for library_name, library in sorted(LIBRARIES.items()):
         star_reference = STAR_REFERENCES[library['reference_genome']]
         chrom_sizes = os.path.join(star_reference, 'chrNameLength.txt')
-        for rg, files in library['readgroups'].items():
+        for rg in sorted(library['readgroups'].keys()):
             read_group_dir = make_read_group_path(library_name, rg)
             star_dir = os.path.join(STAR_DIR, read_group_dir)
             bam = os.path.join(star_dir, 'Aligned.sortedByCoord.out.bam')
