@@ -198,5 +198,5 @@ when it finishes, or if any job encounters an error.
 .. _samtools: http://samtools.sourceforge.net/
 .. _drmr: https://github.com/ParkerLab/drmr/
 .. _hub: https://github.com/github/hub
-.. _The genetic regulatory signature of type 2 diabetes in human skeletal muscle, Scott et al., Nature Communications 2016: https://dx.doi.org/10.1038/ncomms11764
-.. _Transposition of native chromatin for fast and sensitive epigenomic profiling of open chromatin, DNA-binding proteins and nucleosome position, Buenrostro et al., Nature Methods 2013: http://doi.org/10.1038/nmeth.2688
+.. _The genetic regulatory signature of type 2 diabetes in human skeletal muscle, Scott et al., Nature Communications 2016: https://doi.org/10.1038/ncomms11764
+.. _Transposition of native chromatin for fast and sensitive epigenomic profiling of open chromatin, DNA-binding proteins and nucleosome position, Buenrostro et al., Nature Methods 2013: https://doi.org/10.1038/nmeth.2688
