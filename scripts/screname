@@ -103,7 +103,7 @@ if not os.path.isdir(args.dest):
 for sample, metadata in sorted(samples.items()):
     context = {
         'sample': sample,
-        'library': '{}_{}'.format(sample, metadata['Description']),
+        'library': sample,
         'description': metadata['Description'],
     }
     if sample in overrides:

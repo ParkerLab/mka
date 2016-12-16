@@ -7,8 +7,8 @@
 # and publication to GitHub and our wiki.
 #
 
+from __future__ import print_function
 import argparse
-import curses
 import csv
 import json
 import logging
@@ -172,6 +172,7 @@ def write_templates(template_context, destination_directory, analysis_type=None)
 def parse_library_filename(library_file):
     sample = library = readgroup = description = pair_index = ''
     base = os.path.basename(library_file)
+
     m = LIBRARY_FILENAME_PATTERN.match(base)
     if m:
         sample = m.group('sample')
@@ -306,7 +307,7 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
             if metadata['library'][:3] in URL_PREFIXES:
                 metadata['url'] = URL_PREFIXES[metadata['library'][:3]] + metadata['library']
             elif metadata['sample'][:3] in URL_PREFIXES:
-                metadata['url'] = URL_PREFIXES[sample[:3]] + metadata['sample']
+                metadata['url'] = URL_PREFIXES[metadata['sample'][:3]] + metadata['sample']
 
         if interactive:
             get_metadata(metadata, 'description', '  description ({}): ')
@@ -452,11 +453,15 @@ if __name__ == '__main__':
     libraries = []
     for library in args.libraries:
         library = os.path.abspath(library)
-        if os.path.exists(library):
-            libraries.append(library)
-        else:
-            logging.fatal('File not found: {}'.format(library))
+        if not os.path.exists(library):
+            logging.fatal('Library file does not exist: {}'.format(library))
             sys.exit(1)
+
+        if not os.path.isfile(library):
+            logging.fatal('Library file is not a file: {}'.format(library))
+            sys.exit(1)
+
+        libraries.append(library)
 
     if not libraries:
         logging.fatal('Please supply at least one FASTQ file to analyze.')
