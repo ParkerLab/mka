@@ -15,16 +15,16 @@ import os
 import re
 
 
-REFERENCE_ROOT = os.getenv('MKA_REFERENCE_ROOT', '/nfs/turbo/parkerlab1/lab/data/reference')
+REFERENCE_ROOT = os.getenv('MKA_REFERENCE_ROOT', '/lab/data/reference')
 
 prefix_reference_root = functools.partial(os.path.join, REFERENCE_ROOT)
 
 STAR_REFERENCES = {
-    'danforth': prefix_reference_root('mouse/danforth/index/STAR/2.5.1b'),
-    'hg19': prefix_reference_root('human/hg19/index/STAR/2.5.1b'),
-    'mm9': prefix_reference_root('mouse/mm9/index/STAR/2.5.1b'),
-    'mm9etn': prefix_reference_root('mouse/mm9etn/index/STAR/2.5.1b/sjdbOverhang100'),
-    'rn5': prefix_reference_root('rat/rn5/index/STAR/2.5.1b'),
+    'danforth': prefix_reference_root('mouse/danforth/index/STAR/current'),
+    'hg19': prefix_reference_root('human/hg19/index/STAR/current'),
+    'mm9': prefix_reference_root('mouse/mm9/index/STAR/current'),
+    'mm9etn': prefix_reference_root('mouse/mm9etn/index/STAR/current/sjdbOverhang100'),
+    'rn5': prefix_reference_root('rat/rn5/index/STAR/current'),
 }
 
 FASTQ_RE = re.compile('\.f(ast)?q(\.gz)?$')
@@ -101,7 +101,7 @@ def symlink(source_path, dest_path, abs=False):
     workdir = os.path.isdir(dest_path) and dest_path or os.path.dirname(dest_path)
 
     with working_directory(workdir):
-        src = abs and os.path.abspath(source_path) or os.path.relpath(source_path, dest_path)
+        src = abs and os.path.abspath(source_path) or os.path.relpath(source_path)
         dest = dest_path
         dest_base = os.path.basename(dest)
         if os.path.isdir(dest_path):
@@ -207,34 +207,34 @@ def fastqc():
             printp("""\n# drmr:wait""")
 
 
-def star(command_template=None, threads=4, memory=32):
-    if command_template is None:
-        command_template = """ionice -c3 STAR --runThreadN {} --readFilesCommand gunzip -c --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --sjdbGTFfile {} --readFilesIn {}"""
+def star(mapping_template=None, threads=8, memory=32):
+    if mapping_template is None:
+        mapping_template = """STAR --runThreadN {} --readFilesCommand gunzip -c --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --readFilesIn {}"""
 
     printp('\n# drmr:label star')
 
-    for library_name, library in sorted(LIBRARIES.items()):
-        reference_genome = library['reference_genome']
+    # Work with each reference genome in sequence, to reduce I/O costs
+    for reference_genome, libraries in libraries_by_genome():
         star_reference = STAR_REFERENCES[reference_genome]
-        gtf = os.path.join(star_reference, 'annotation.gtf')
 
-        for rg, files in sorted(library['readgroups'].items()):
-            files = sorted(files)
-            star_dir = os.path.join(STAR_DIR, make_read_group_path(library_name, rg))
-            mkdir(star_dir)
+        for library in libraries:
+            for rg, files in sorted(library['readgroups'].items()):
+                files = sorted(files)
+                star_dir = os.path.join(STAR_DIR, make_read_group_path(library['library'], rg))
+                mkdir(star_dir)
 
-            for f in files:
-                symlink(f, star_dir)
+                for f in files:
+                    symlink(f, star_dir)
 
-            fastq_files = [os.path.basename(f) for f in files]
+                fastq_files = [os.path.basename(f) for f in files]
 
-            printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
-            printp(command_template.format(threads, star_reference, gtf, ' '.join(fastq_files)))
+                printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
+                printp(mapping_template.format(threads, star_reference, ' '.join(fastq_files)), timed=True, ioniced=True)
 
     printp("""\n# drmr:wait""")
 
 
-def qorts(command_template=None, threads=4, memory=9):
+def qorts(command_template=None, threads=4, memory=16):
     if command_template is None:
         qorts_command_template = """java -Xmx8g -jar $QORTS_JAR QC {} --generatePlots --title {} --chromSizes {} {} {} {}"""
 
@@ -262,7 +262,7 @@ def qorts(command_template=None, threads=4, memory=9):
             mkdir(qorts_dir)
 
             printp('\n# drmr:job time_limit=2h processors={} memory={}g working_directory={}'.format(threads, memory, qorts_dir))
-            printp(qorts_command_template.format(strand_options, library_name, chrom_sizes, bam, gtf, qorts_dir))
+            printp(qorts_command_template.format(strand_options, library_name, chrom_sizes, bam, gtf, qorts_dir), timed=True, ioniced=True)
 
     printp("""\n# drmr:wait""")
 
@@ -324,7 +324,7 @@ if __name__ == '__main__':
     printp('#!/bin/bash')
     printp('# -*- mode: sh; coding: utf-8 -*-\n')
 
-    fastqc()
     star()
     qorts()
     qorts_wig2bigwig()
+    fastqc()

@@ -172,7 +172,7 @@ def list_source_fastq_pairs(data, source_data_path, suffix='.fq.gz'):
 #
 
 # CHANGES REQUIRED
-SOURCE_DATA_PATH = '/nfs/turbo/parkerlab1/lab/data/papers/ackerman-atac-rna-alpha-beta'
+SOURCE_DATA_PATH = '/lab/data/'
 
 # The DATA hierarchy is used to group analysis products. It can be a
 # single level, mapping your analysis name to a single list

@@ -17,7 +17,7 @@ import re
 import sys
 
 
-REFERENCE_ROOT = os.getenv('MKA_REFERENCE_ROOT', '/nfs/turbo/parkerlab1/lab/data/reference')
+REFERENCE_ROOT = os.getenv('MKA_REFERENCE_ROOT', '/lab/data/reference')
 
 prefix_reference_root = functools.partial(os.path.join, REFERENCE_ROOT)
 
@@ -386,7 +386,7 @@ def mark_duplicates():
             input_bam = make_read_group_file(library_name, rg, '.bam')
             output_bam = make_read_group_file(library_name, rg, '.md.bam')
             symlink(os.path.join(BWA_DIR, input_bam), MD_DIR)
-            printp("""java -Xms6g -Xmx6g -XX:ParallelGCThreads=2 -jar $PICARD_HOME/picard.jar MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_name}___{rg}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.""".format(**locals()), timed=True)
+            printp("""picard -m 6g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_name}___{rg}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.""".format(**locals()), timed=True)
 
     printp("""\n# drmr:wait""")
     printp("""\n#\n# index the BAM files with marked duplicates, for pruning\n#\n""")
