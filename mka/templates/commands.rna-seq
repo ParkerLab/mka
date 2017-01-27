@@ -203,17 +203,17 @@ def fastqc():
         symlink(f, FASTQC_DIR)
         printp("""fastqc {}""".format(os.path.basename(f)), timed=True, ioniced=True)
         if LIMIT_IO and index % LIMIT_IO == 0:
-            # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
+            # limit the number of concurrent jobs to avoid thrashing the disk
             printp("""\n# drmr:wait""")
 
 
-def star(mapping_template=None, threads=8, memory=32):
+def star(mapping_template=None, threads=4, memory=32, max_star_instances=0):
     if mapping_template is None:
         mapping_template = """STAR --runThreadN {} --readFilesCommand gunzip -c --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --readFilesIn {}"""
 
     printp('\n# drmr:label star')
 
-    # Work with each reference genome in sequence, to reduce I/O costs
+    index = 0
     for reference_genome, libraries in libraries_by_genome():
         star_reference = STAR_REFERENCES[reference_genome]
 
@@ -231,10 +231,15 @@ def star(mapping_template=None, threads=8, memory=32):
                 printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
                 printp(mapping_template.format(threads, star_reference, ' '.join(fastq_files)), timed=True, ioniced=True)
 
+                index += 1
+                if max_star_instances and index % max_star_instances == 0:
+                    # limit the number of concurrent jobs to avoid thrashing the disk
+                    printp("""\n# drmr:wait""")
+
     printp("""\n# drmr:wait""")
 
 
-def qorts(command_template=None, threads=4, memory=16):
+def qorts(command_template=None, threads=4, memory=12):
     if command_template is None:
         qorts_command_template = """java -Xmx8g -jar $QORTS_JAR QC {} --generatePlots --title {} --chromSizes {} {} {} {}"""
 
