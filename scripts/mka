@@ -303,11 +303,10 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
             while not metadata['reference_genome']:
                 get_metadata(metadata, 'reference_genome', '  Please specify the reference genome: ')
 
-        if not metadata['url']:
-            if metadata['library'][:3] in URL_PREFIXES:
-                metadata['url'] = URL_PREFIXES[metadata['library'][:3]] + metadata['library']
-            elif metadata['sample'][:3] in URL_PREFIXES:
-                metadata['url'] = URL_PREFIXES[metadata['sample'][:3]] + metadata['sample']
+        if metadata['library'][:3] in URL_PREFIXES:
+            metadata['url'] = URL_PREFIXES[metadata['library'][:3]] + metadata['library']
+        elif metadata['sample'][:3] in URL_PREFIXES:
+            metadata['url'] = URL_PREFIXES[metadata['sample'][:3]] + metadata['sample']
 
         if interactive:
             get_metadata(metadata, 'description', '  description ({}): ')
