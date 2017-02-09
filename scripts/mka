@@ -247,6 +247,21 @@ def read_runinfo(filename):
     return info
 
 
+def get_default_metadata(json_file):
+    defaults = json.load(open(json_file))
+
+    # if the file is in the old format without library-specific defaults, rewrite it
+    if 'defaults' not in defaults:
+        if 'files' not in defaults:
+            defaults = {
+                'defaults': defaults
+            }
+        else:
+            defaults['defaults'] = {}
+
+    return defaults
+
+
 def get_metadata(metadata, attribute, prompt, transform=str):
     metadata[attribute] = transform(input(prompt.format(metadata[attribute])) or metadata[attribute])
 
@@ -255,7 +270,7 @@ def upper(s):
     return str(s).upper()
 
 
-def describe_libraries(library_files, analysis_type=None, interactive=False, defaults=None, run_info_file=None):
+def describe_libraries(library_files, analysis_type=None, interactive=False, defaults_file=None, run_info_file=None):
     libraries = {}
 
     metadata = {
@@ -278,12 +293,13 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         logging.debug('Reading sequencing run information from {}'.format(run_info_file))
         run_info = read_runinfo(run_info_file)
 
-    if defaults:
-        default_details = json.load(open(defaults))
-        metadata.update({k: v for k, v in default_details.items() if k in metadata and v})
+    if defaults_file:
+        default_details = get_default_metadata(defaults_file)
+        metadata.update({k: v for k, v in default_details['defaults'].items() if k in metadata and v})
 
     for library_file in library_files:
         filename_metadata = parse_library_filename(library_file)
+        metadata.update({k: v for k, v in default_details['files'][os.path.basename(library_file)].items() if k in metadata and v})
 
         if run_info:
             library_run_info = run_info[filename_metadata['sample']]
