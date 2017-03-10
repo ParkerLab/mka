@@ -31,7 +31,7 @@ LIBRARY_FILENAME_PATTERN = re.compile(
     '___(?P<library>.*?)'
     '(?:___(?P<readgroup>.*?))?'  # optional
     '(?:___(?P<description>.*?))?'  # optional
-    '\.(?P<pair_index>\d)*\.'
+    '\.(?P<pair_index>\d)*\.f(ast)*q.*'
 )
 
 SUPPORTED_ANALYSES = [
@@ -250,14 +250,14 @@ def read_runinfo(filename):
 def get_default_metadata(json_file):
     defaults = json.load(open(json_file))
 
-    # if the file is in the old format without library-specific defaults, rewrite it
+    # if the file is in the old format without sample/library/file-specific defaults, rewrite it
     if 'defaults' not in defaults:
-        if 'files' not in defaults:
-            defaults = {
-                'defaults': defaults
-            }
-        else:
-            defaults['defaults'] = {}
+        defaults = {
+            'defaults': defaults,
+            'samples': {},
+            'libraries': {},
+            'files': {}
+        }
 
     return defaults
 
@@ -293,20 +293,24 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         logging.debug('Reading sequencing run information from {}'.format(run_info_file))
         run_info = read_runinfo(run_info_file)
 
+    defaults = {}
     if defaults_file:
-        default_details = get_default_metadata(defaults_file)
-        metadata.update({k: v for k, v in default_details['defaults'].items() if k in metadata and v})
+        defaults = get_default_metadata(defaults_file)
 
     for library_file in library_files:
         filename_metadata = parse_library_filename(library_file)
-        metadata.update({k: v for k, v in default_details['files'][os.path.basename(library_file)].items() if k in metadata and v})
+        metadata.update({k: v for k, v in filename_metadata.items() if k in metadata and v})
+
+        metadata.update({k: v for k, v in defaults.get('defaults', {}).items() if k in metadata and v})
+        metadata.update({k: v for k, v in defaults.get('samples', {}).get(filename_metadata.get('sample'), {}).items() if k in metadata and v})
+        metadata.update({k: v for k, v in defaults.get('libraries', {}).get(filename_metadata.get('library'), {}).items() if k in metadata and v})
+        metadata.update({k: v for k, v in defaults.get('files', {}).get(os.path.basename(library_file), {}).items() if k in metadata and v})
 
         if run_info:
             library_run_info = run_info[filename_metadata['sample']]
             if library_run_info:
                 metadata.update({k: v for k, v in library_run_info.items() if k in metadata and v})
 
-        metadata.update({k: v for k, v in filename_metadata.items() if k in metadata and v})
         if interactive:
             print('\nPlease supply metadata for library file {}:'.format(library_file))
             get_metadata(metadata, 'sample', '  sample ({}): ')

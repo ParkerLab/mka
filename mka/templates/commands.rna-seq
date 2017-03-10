@@ -207,7 +207,7 @@ def fastqc():
             printp("""\n# drmr:wait""")
 
 
-def star(mapping_template=None, threads=4, memory=32, max_star_instances=0):
+def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
     if mapping_template is None:
         mapping_template = """STAR --runThreadN {} --readFilesCommand gunzip -cf --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --readFilesIn {}"""
 
@@ -284,7 +284,7 @@ def qorts(command_template=None, threads=4, memory=12):
 
     mkdir(os.path.join(QORTS_DIR, ANALYSIS_NAME))
 
-    printp('\n# drmr:job time_limit=2h processors={} memory={}g working_directory={}'.format(threads, memory, QORTS_DIR))
+    printp('\n# drmr:job time_limit=24h processors={} memory={}g working_directory={}'.format(threads, memory, QORTS_DIR))
     printp("""qortsGenMultiQC.R {}/ {} {}/""".format(QORTS_DIR, decoder_filename, ANALYSIS_NAME))
 
 
