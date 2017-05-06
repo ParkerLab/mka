@@ -167,31 +167,15 @@ def make_read_group_path(library_name, readgroup, suffix=''):
 
 
 def make_read_group_header(library, id):
-    read_group_components = {
-        'ID': '{}___{}'.format(library['library'], id),
-
-        # library
-        'LB': library['library'],
-
-        # sample
-        'SM': library['sample'],
-
-        # sequencing center name
-        'CN': library['sequencing_center'],
-
-        # ISO8601 date(time) of sequencing
-        'DT': library['sequencing_date'],
-
-        # platform (Illumina, Solid, etc. -- see the spec for valid values
-        'PL': library['sequencing_platform'],
-
-        # free-form description
-        'DS': library['description'],
-    }
-
-    header = """@RG\\t{}""".format('\\t'.join('{}:{}'.format(k, v) for k, v in sorted(read_group_components.items()) if v))
-
-    return header
+    return """ID:"{}" LB:"{}" SM:"{}" CN:"{}" DT:"{}" PL:"{}" DS:"{}" """.format(
+        '{}___{}'.format(library['library'], id),
+        library['library'],
+        library['sample'],
+        library['sequencing_center'],
+        library['sequencing_date'],
+        library['sequencing_platform'],
+        library['description']
+    )
 
 
 def fastqc():
@@ -213,7 +197,7 @@ def fastqc():
 
 def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
     if mapping_template is None:
-        mapping_template = """STAR --runThreadN {} --readFilesCommand gunzip -cf --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --readFilesIn {}"""
+        mapping_template = """STAR --runThreadN {} --readFilesCommand gunzip -cf --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --outSAMattrRGline {} --readFilesIn {}"""
 
     printp('\n# drmr:label star')
 
@@ -233,7 +217,7 @@ def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
                 fastq_files = [os.path.basename(f) for f in files]
 
                 printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
-                printp(mapping_template.format(threads, star_reference, ' '.join(fastq_files)), timed=True, ioniced=True)
+                printp(mapping_template.format(threads, star_reference, make_read_group_header(library, rg), ' '.join(fastq_files)), timed=True, ioniced=True)
 
                 index += 1
                 if max_star_instances and index % max_star_instances == 0:
@@ -244,7 +228,8 @@ def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
 
 
 def merge_star_libraries():
-    printp('\n# drmr:label merge-star-libraries')
+    printp("""\n# drmr:label merge-star-libraries""")
+    printp("""# drmr:job nodes=1 processors=1 memory=4g time_limit=4h working_directory={}""".format(STAR_DIR))
 
     libraries_dir = os.path.join(STAR_DIR, 'libraries')
     mkdir(libraries_dir)
@@ -259,7 +244,8 @@ def merge_star_libraries():
 
 
 def merge_star_samples():
-    printp('\n# drmr:label merge-star-samples')
+    printp("""\n# drmr:label merge-star-samples""")
+    printp("""# drmr:job nodes=1 processors=1 memory=4g time_limit=4h working_directory={}""".format(STAR_DIR))
 
     samples_dir = os.path.join(STAR_DIR, 'samples')
     mkdir(samples_dir)
