@@ -40,10 +40,10 @@ AUTOSOMAL_REFERENCES = {
 }
 
 EXCLUDED_REGIONS = {
-    'dm3': map(prefix_reference_root, ['fly/dm3/annot/dm3-blacklist.bed.gz']),
-    'hg19': map(prefix_reference_root, ['human/hg19/annot/wgEncodeDukeMapabilityRegionsExcludable.bed.gz', 'human/hg19/annot/wgEncodeDacMapabilityConsensusExcludable.bed.gz']),
-    'mm9': map(prefix_reference_root, ['mouse/mm9/annot/mm9-blacklist.bed.gz']),
-    'mm10': map(prefix_reference_root, ['mouse/mm10/annot/mm10.blacklist.bed.gz'])
+    'dm3': list(map(prefix_reference_root, ['fly/dm3/annot/dm3-blacklist.bed.gz'])),
+    'hg19': list(map(prefix_reference_root, ['human/hg19/annot/wgEncodeDukeMapabilityRegionsExcludable.bed.gz', 'human/hg19/annot/wgEncodeDacMapabilityConsensusExcludable.bed.gz'])),
+    'mm9': list(map(prefix_reference_root, ['mouse/mm9/annot/mm9-blacklist.bed.gz'])),
+    'mm10': list(map(prefix_reference_root, ['mouse/mm10/annot/mm10.blacklist.bed.gz']))
 }
 
 TSS_REFERENCES = {
