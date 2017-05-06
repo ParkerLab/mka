@@ -54,12 +54,16 @@ LIMIT_IO = 8
 
 LIBRARIES = {{LIBRARIES}}
 
+SAMPLES = {}
+for library in LIBRARIES.values():
+    SAMPLES.setdefault(library['sample'], []).append(library)
+
 
 def maybe_gzip(filename, ioniced=False):
     """Compress a file with gzip."""
     template_data = {
         'f': filename,
-        'ionice': ioniced and 'ionice -c 3 ' or ''
+        'ionice': ioniced and 'ionice -c2 -n7 ' or ''
     }
 
     command_template = """if [ -r "{f}" ]; then {ionice}gzip -f "{f}"; elif [ -r "{f}".gz ]; then echo '"{f}" already gzipped.'; fi"""
@@ -79,7 +83,7 @@ def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
         if timed:
             pipeline_file.write('/usr/bin/time -v ')
         if ioniced:
-            pipeline_file.write('ionice -c3 ')
+            pipeline_file.write('ionice -c2 -n7 ')
         pipeline_file.write(text)
         pipeline_file.write('\n')
 
@@ -239,6 +243,39 @@ def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
     printp("""\n# drmr:wait""")
 
 
+def merge_star_libraries():
+    printp('\n# drmr:label merge-star-libraries')
+
+    libraries_dir = os.path.join(STAR_DIR, 'libraries')
+    mkdir(libraries_dir)
+    for index, (library_name, library) in enumerate(sorted(LIBRARIES.items()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
+            printp("""\n# drmr:wait""")
+
+        readgroup_bams = [os.path.join(STAR_DIR, make_read_group_path(library['library'], rg), 'Aligned.sortedByCoord.out.bam') for rg in sorted(library['readgroups'].keys())]
+
+        printp("""samtools merge -f {}/{}.bam {}""".format(libraries_dir, library_name, ' '.join(readgroup_bams)), ioniced=True)
+
+
+def merge_star_samples():
+    printp('\n# drmr:label merge-star-samples')
+
+    samples_dir = os.path.join(STAR_DIR, 'samples')
+    mkdir(samples_dir)
+    for index, (sample, libraries) in enumerate(sorted(SAMPLES.items()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
+            printp("""\n# drmr:wait""")
+
+        sample_bams = []
+        for library in libraries:
+            readgroup_bams = [os.path.join(STAR_DIR, make_read_group_path(library['library'], rg), 'Aligned.sortedByCoord.out.bam') for rg in sorted(library['readgroups'].keys())]
+            sample_bams.extend(readgroup_bams)
+
+        printp("""samtools merge -f {}/{}.bam {}""".format(samples_dir, sample, ' '.join(sample_bams)), ioniced=True)
+
+
 def qorts(command_template=None, threads=4, memory=12):
     if command_template is None:
         qorts_command_template = """java -Xmx8g -jar $QORTS_JAR QC {} --generatePlots --title {} --chromSizes {} {} {} {}"""
@@ -330,6 +367,14 @@ if __name__ == '__main__':
     printp('# -*- mode: sh; coding: utf-8 -*-\n')
 
     star()
+
+    # Uncomment to create a single BAM for each library by merging all of its readgroup BAMs
+    # merge_star_libraries()
+
+    # Uncomment to create a single BAM for each sample by merging all of its libraries' readgroup BAMs
+    # merge_star_samples()
+
     qorts()
     qorts_wig2bigwig()
+
     fastqc()

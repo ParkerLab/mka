@@ -15,7 +15,7 @@ import sys
 import textwrap
 
 
-SEQCORE_RE = re.compile('^\d+_(?P<barcode>[-ACGT]+)_S(?P<samplenumber>\d+)_L(?P<lane>\d+)_R(?P<pair_index>\d)_001\.fastq.gz$')
+SEQCORE_RE = re.compile('^\d+_(?P<barcode>[-ACGT]+)_S(?P<samplenumber>\d+)_L(?P<lane>\d+)_R(?P<pair_index>\d)_\d+\.fastq.gz$')
 MKA_TEMPLATE = '{sample}___{library}___L{lane}___{description}.{pair_index}.fq.gz'
 
 def read_runinfo(filename):

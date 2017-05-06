@@ -24,7 +24,7 @@ import jinja2
 
 
 PROGRAM = 'mka'
-PROGRAM_VERSION = '0.5.0'
+PROGRAM_VERSION = '0.7.2'
 
 LIBRARY_FILENAME_PATTERN = re.compile(
     '^(?P<sample>.*?)'
@@ -195,6 +195,15 @@ def parse_library_filename(library_file):
     }
 
 
+NUMERIC_DATE_RE = re.compile('(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})')
+def parsedate(dtstring):
+    m = NUMERIC_DATE_RE.match(dtstring)
+    if m:
+        dtstring = '{year}-{month}-{day}'.format(**m.groupdict())
+
+    return dateparser.parse(dtstring, settings={'PREFER_DATES_FROM': 'past'})
+
+
 def read_runinfo(filename):
     """
     Reads the CSV containing run info.
@@ -223,7 +232,7 @@ def read_runinfo(filename):
             else:
                 if line.startswith('Date,'):
                     sequencing_date = line.split(',')[1]
-                    sequencing_date = dateparser.parse(sequencing_date, settings={'PREFER_DATES_FROM': 'past'})
+                    sequencing_date = parsedate(sequencing_date)
                     if sequencing_date:
                         common_info['sequencing_date'] = sequencing_date.date().isoformat()
 
@@ -338,7 +347,7 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         date_ok = False
         sequencing_date = metadata['sequencing_date']
         while sequencing_date and not date_ok:
-            sequencing_date = dateparser.parse(sequencing_date, settings={'PREFER_DATES_FROM': 'past'})
+            sequencing_date = parsedate(sequencing_date)
             if sequencing_date:
                 metadata['sequencing_date'] = sequencing_date.date().isoformat()
                 date_ok = True
@@ -492,8 +501,9 @@ if __name__ == '__main__':
             sys.exit(1)
 
     analysis_name = args.name or os.path.basename(control_path)
+    description = args.description and args.description.replace('"', r'\"').replace("'", "\'") or ''
     template_context = {
-        'DESCRIPTION': args.description.replace('"', r'\"').replace("'", "\'"),
+        'DESCRIPTION': description,
         'CONTROL_PATH': control_path,
         'ANALYSIS_PATH': analysis_path,
         'ANALYSIS_NAME': analysis_name,

@@ -46,6 +46,12 @@ EXCLUDED_REGIONS = {
     'mm10': map(prefix_reference_root, ['mouse/mm10/annot/mm10.blacklist.bed.gz'])
 }
 
+TSS_REFERENCES = {
+    'hg19': prefix_reference_root('human/hg19/annot/hg19.tss.refseq.bed'),
+    'mm9': prefix_reference_root('mouse/mm9/annot/mm9.tss.refseq.bed'),
+    'rn5': prefix_reference_root('rat/rn5/annot/rn5.tss.refseq.bed'),
+}
+
 FASTQ_RE = re.compile('\.f(ast)?q(\.gz)?$')
 
 MACS2_GENOME_SIZES = {
@@ -80,6 +86,7 @@ MACS2_DIR = os.path.join(WORK_PATH, 'macs2')
 MD_DIR = os.path.join(WORK_PATH, 'mark_duplicates')
 PRUNE_DIR = os.path.join(WORK_PATH, 'prune')
 TRIM_ADAPTER_DIR = os.path.join(WORK_PATH, 'trim_adapters')
+GB_DIR = os.path.join(WORK_PATH, 'gb')
 
 # By default, we use ionice and limit the number of particularly
 # I/O-intensive jobs that run at once, to keep the machine
@@ -102,7 +109,7 @@ def maybe_gzip(filename, ioniced=False):
     """Compress a file with gzip."""
     template_data = {
         'f': filename,
-        'ionice': ioniced and 'ionice -c 3 ' or ''
+        'ionice': ioniced and 'ionice -c 2 -n 7 ' or ''
     }
 
     command_template = """if [ -r "{f}" ]; then {ionice}gzip -f "{f}"; elif [ -r "{f}".gz ]; then echo '"{f}" already gzipped.'; fi"""
@@ -149,7 +156,7 @@ def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
         if timed:
             pipeline_file.write('/usr/bin/time -v ')
         if ioniced:
-            pipeline_file.write('ionice -c3 ')
+            pipeline_file.write('ionice -c 2 -n 7 ')
         pipeline_file.write(m.group(2))
         pipeline_file.write('\n')
 
@@ -213,6 +220,25 @@ def iterate_library_files(library_name):
 
 def iterate_all_files():
     return itertools.chain(*[iterate_library_files(library_name) for library_name in sorted(LIBRARIES.keys())])
+
+
+def library_reference_genomes():
+    return sorted(list(set(library['reference_genome'] for library_name, library in sorted(LIBRARIES.items()))))
+
+
+def libraries_by_genome():
+    libraries = {}
+    for genome in library_reference_genomes():
+        libraries[genome] = [library for library_name, library in sorted(LIBRARIES.items()) if library['reference_genome'] == genome]
+
+    # return genome, libraries for each genom
+    return sorted(libraries.items())
+
+
+def get_chromosome_sizes_path(library):
+    reference_genome = library['reference_genome']
+    bwa_reference = BWA_REFERENCES[reference_genome]
+    return '{}.chrom_sizes'.format(bwa_reference)
 
 
 def make_read_group_file(library_name, readgroup, suffix=''):
@@ -386,7 +412,7 @@ def mark_duplicates():
             input_bam = make_read_group_file(library_name, rg, '.bam')
             output_bam = make_read_group_file(library_name, rg, '.md.bam')
             symlink(os.path.join(BWA_DIR, input_bam), MD_DIR)
-            printp("""picard -m 4g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_name}___{rg}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.""".format(**locals()), timed=True)
+            printp("""picard -m 4g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_name}___{rg}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.""".format(**locals()), timed=True, ioniced=True)
 
     printp("""\n# drmr:wait""")
     printp("""\n#\n# index the BAM files with marked duplicates, for pruning\n#\n""")
@@ -395,7 +421,7 @@ def mark_duplicates():
     for library_name, library in sorted(LIBRARIES.items()):
         for rg in sorted(library['readgroups'].keys()):
             bam = make_read_group_file(library_name, rg, '.md.bam')
-            printp("""samtools index {bam}""".format(**locals()), timed=True)
+            printp("""samtools index {bam}""".format(**locals()), timed=True, ioniced=True)
 
 
 def prune(mapq=30):
@@ -433,7 +459,7 @@ def prune(mapq=30):
         for rg in sorted(library['readgroups'].keys()):
             input_bam = make_read_group_file(library_name, rg, '.md.bam')
             output_bam = make_read_group_file(library_name, rg, '.pruned.bam')
-            printp(PRUNE_TEMPLATE.format(**locals()), timed=True)
+            printp(PRUNE_TEMPLATE.format(**locals()), timed=True, ioniced=True)
 
 
 def compress_macs2_output(prefix, ioniced=True):
@@ -461,7 +487,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
     printp("""\n#\n# call broad peaks (keeping dups in case of merged files)\n#\n""")
     printp("""\n# drmr:job nodes=1 processors=1 memory=8g working_directory={} time_limit=4h""".format(MACS2_DIR))
 
-    MACS2_BROAD_PEAK_TEMPLATE = """{% raw %}macs2 callpeak -t {{input_bam}} -f BAM -n {{prefix}}.broad -g {{macs2_genome_size}} --nomodel --shift {shift} --extsize {extsize} -B --broad --keep-dup all{% endraw %}""".format(**locals())
+    MACS2_BROAD_PEAK_TEMPLATE = """{% raw %}macs2 callpeak -t {{input_bam}} -f BAM -n {{prefix}}.broad -g {{macs2_genome_size}} --nomodel --shift {shift} --extsize {extsize} -B --broad --keep-dup all > {{prefix}}.macs2.out 2>&1{% endraw %}""".format(**locals())
 
     printp("""# drmr:label macs2-readgroups\n""")
     for library_name, library in sorted(LIBRARIES.items()):
@@ -482,14 +508,14 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
                 # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
                 printp("""\n# drmr:wait""")
 
-            printp("""\nsamtools merge -f {}.pruned.bam {}""".format(library_name, ' '.join(make_read_group_file(library_name, rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))), ioniced=True)
+            printp("""\nsamtools merge -f {}.library.pruned.bam {}""".format(library_name, ' '.join(make_read_group_file(library_name, rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))), ioniced=True)
 
         printp("""\n# drmr:wait""")
 
         printp("""\n# drmr:job nodes=1 processors=1 memory=8g working_directory={} time_limit=4h""".format(MACS2_DIR))
         printp("""\n# drmr:label macs2-libraries\n""")
         for library_name, library in sorted(LIBRARIES.items()):
-            input_bam = '{}.pruned.bam'.format(library_name)
+            input_bam = '{}.library.pruned.bam'.format(library_name)
             prefix = library_name
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
             printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=True)
@@ -508,14 +534,14 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
             for library in sorted(libraries):
                 pruned_readgroup_bams.extend(make_read_group_file(library['library'], rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))
 
-            printp("""\nsamtools merge -f {}.pruned.bam {}""".format(sample, ' '.join(pruned_readgroup_bams)), ioniced=True)
+            printp("""\nsamtools merge -f {}.sample.pruned.bam {}""".format(sample, ' '.join(pruned_readgroup_bams)), ioniced=True)
 
         printp("""\n# drmr:wait""")
 
         printp("""\n# drmr:job nodes=1 processors=1 memory=8g working_directory={} time_limit=4h""".format(MACS2_DIR))
         printp("""\n# drmr:label macs2-samples\n""")
         for sample in sorted(SAMPLES.keys()):
-            input_bam = '{}.pruned.bam'.format(sample)
+            input_bam = '{}.sample.pruned.bam'.format(sample)
             prefix = sample
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
             printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=True)
@@ -525,32 +551,128 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
     printp("""\n#\n# Compress MACS2 BedGraph output\n#""")
     printp("""\n# drmr:label compress-macs2-output\n""")
 
+    compression_targets = set()
     for sample, libraries in sorted(SAMPLES.items()):
         if call_samples:
-            compress_macs2_output(sample, ioniced=True)
+            compression_targets.add(sample)
         for library in sorted(libraries):
             if call_libraries:
-                compress_macs2_output(library['library'], ioniced=True)
+                compression_targets.add(library['library'])
             for rg in sorted(library['readgroups'].keys()):
-                compress_macs2_output(make_read_group_file(library['library'], rg), ioniced=True)
+                compression_targets.add(make_read_group_file(library['library'], rg))
 
+    for target in sorted(compression_targets):
+        compress_macs2_output(target)
+
+    blacklist_targets = set()
     if exclude_blacklisted_regions:
         printp("""\n# drmr:wait""")
         printp("""\n# drmr:label exclude-blacklisted-peaks\n""")
         for sample, libraries in sorted(SAMPLES.items()):
             if call_samples:
-                exclude_blacklisted_peaks(sample, libraries[0]['reference_genome'])
+                blacklist_targets.add((sample, libraries[0]['reference_genome']))
 
             for library in sorted(libraries):
                 if call_libraries:
-                    exclude_blacklisted_peaks(library['library'], library['reference_genome'])
+                    blacklist_targets.add((library['library'], library['reference_genome']))
 
                 for rg in sorted(library['readgroups'].keys()):
                     prefix = make_read_group_file(library['library'], rg)
-                    exclude_blacklisted_peaks(prefix, library['reference_genome'])
+                    blacklist_targets.add((prefix, library['reference_genome']))
 
 
-def ataqv(use_autosomal_reference_files=False):
+    for target, genome in sorted(blacklist_targets):
+        exclude_blacklisted_peaks(target, genome)
+
+
+def normalize_macs2_treatment_pileups():
+    """Normalize MACS2 treatment pileup bedgraph files to 10 million fragments"""
+
+    mkdir(GB_DIR)
+
+    printp("""\n#\n# Normalize MACS2 treatment pileup bedgraph files\n#""")
+    printp("""\n# drmr:label normalize-macs2-treatment-pileup""")
+    printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(GB_DIR))
+
+    template = """{% raw %}test -r {macs2_output_file} && (zcat {macs2_treat_pileup_file} | awk -v NTAGS=$(grep 'total tags in treatment' {macs2_output_file} | awk '{{print $NF}}') '{{$4=$4*(10000000/NTAGS); print}}' | perl -pe 's/\\s+/\\t/g; s/$/\\n/' | grep -v '_' | LC_COLLATE=C sort -k1,1 -k2,2n > {macs2_normalized_treat_pileup_file}) || exit 1{% endraw %}"""
+
+    NTAGS_RE = re.compile('total tags in treatment: (\d+)')
+    for library_name, library in sorted(LIBRARIES.items()):
+        for rg in sorted(library['readgroups'].keys()):
+            prefix = make_read_group_file(library_name, rg)
+            macs2_output_file = os.path.join(MACS2_DIR, '{}.macs2.out'.format(prefix))
+            macs2_treat_pileup_file = os.path.join(MACS2_DIR, '{}.broad_treat_pileup.bdg.gz'.format(prefix))
+            macs2_normalized_treat_pileup_file = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
+            printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def make_macs2_treatment_pileup_bigwigs():
+    """Make bigwig files from the MACS2 treatment pileup bedgraph files"""
+
+    mkdir(GB_DIR)
+
+    printp("""\n#\n# Generate bigwig files from MACS2 treatment pileups\n#""")
+    printp("""\n# drmr:label macs2-treatment-pileup-bigwig""")
+    printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(GB_DIR))
+
+    template = """bedGraphToBigWig {macs2_normalized_treat_pileup_bdg} {chromosome_sizes} {macs2_normalized_treat_pileup_bw}"""
+
+    for library_name, library in sorted(LIBRARIES.items()):
+        chromosome_sizes = get_chromosome_sizes_path(library)
+        for rg in sorted(library['readgroups'].keys()):
+            prefix = make_read_group_file(library_name, rg)
+            macs2_normalized_treat_pileup_bdg = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
+            macs2_normalized_treat_pileup_bw = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bw'.format(prefix))
+            printp(template.format(**locals()), ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def make_track_lines():
+    """Make UCSC Genome Browser track lines for the broad peak files and the normalized treatment pileup bigwig files"""
+
+    base_url = 'https://theparkerlab.med.umich.edu/gb/tracks'
+
+    mkdir(GB_DIR)
+
+    for reference_genome, libraries in libraries_by_genome():
+        track_lines_file = os.path.join(GB_DIR, 'track_lines.' + reference_genome)
+        with open(track_lines_file, 'w') as track_lines:
+            for library in libraries:
+                chromosome_sizes = get_chromosome_sizes_path(library)
+                for rg in sorted(library['readgroups'].keys()):
+                    prefix = make_read_group_file(library['library'], rg)
+                    treat_pileup_bw = '{}.broad_treat_pileup.normalized.bw'.format(prefix)
+                    treat_pileup_bw_url = '{}/{}/{}'.format(base_url, ANALYSIS_NAME, treat_pileup_bw)
+
+                    treat_pileup_track_line = (
+                        """track type=bigWig db={library[reference_genome]} name='{prefix}' """
+                        """visibility=full color=255,128,0 alwaysZero=on maxHeightPixels=50:50:50 """
+                        """windowingFunction=mean smoothingWindow=3 bigDataUrl={treat_pileup_bw_url}\n"""
+                    ).format(**locals())
+
+                    track_lines.write(treat_pileup_track_line)
+
+                    peak_track = '{}.broad_peaks.broadPeak.gz'.format(prefix)
+                    peak_track_url = '{}/{}/{}'.format(base_url, ANALYSIS_NAME, peak_track)
+
+                    peak_track_line = (
+                        """track type=broadPeak db={library[reference_genome]} name='{prefix}_peaks'\n"""
+                        """{peak_track_url}\n"""
+                    ).format(**locals())
+
+                    track_lines.write(peak_track_line)
+
+                    symlink(os.path.join(MACS2_DIR, peak_track), GB_DIR)
+
+    with open(os.path.join(GB_DIR, 'install.sh'), 'w') as install:
+        vs_dir = os.path.join('/lab/web/data/gb/tracks/', ANALYSIS_NAME)
+        install.write("""ssh vs mkdir -p {} && rsync -avL --exclude install.sh {}/ vs:{}/ && ssh vs "chmod 755 {}; chmod 644 {}/*"\n""".format(vs_dir, GB_DIR, vs_dir, vs_dir, vs_dir))
+
+
+def ataqv(use_autosomal_reference_files=False, threads='auto'):
     """
     Run ataqv for each library.
     """
@@ -560,10 +682,9 @@ def ataqv(use_autosomal_reference_files=False):
     printp("""\n#\n# run ataqv\n#""")
     printp("""\n# drmr:label ataqv""")
 
-    ATAQV_TEMPLATE = """ataqv --peak-file {peaks} --metrics-file {metrics_file} --name 'Library {library_name}, read group {rg}' {ataqv_options} {organism} {alignments} > {output_file}\n"""
+    ATAQV_TEMPLATE = """ataqv --peak-file {peak_file} --metrics-file {metrics_file} --name 'Library {library_name}, read group {rg}' {ataqv_options} {organism} {alignments} > {output_file}\n"""
 
-    printp("""\n# drmr:job nodes=1 memory=8g working_directory={} time_limit=4h""".format(ATAQV_DIR))
-
+    orig_threads = threads
     for library_name, library in sorted(LIBRARIES.items()):
         if use_autosomal_reference_files:
             autosomal_reference_filename = os.path.join(ATAQV_DIR, '{}.arf'.format(library_name))
@@ -574,9 +695,11 @@ def ataqv(use_autosomal_reference_files=False):
 
         for rg in sorted(library['readgroups'].keys()):
             alignments = make_read_group_file(library_name, rg, '.md.bam')
-            peaks = make_read_group_file(library_name, rg, '.broad_peaks.broadPeak.gz')
+            alignments_index = alignments + '.bai'
+            peak_file = make_read_group_file(library_name, rg, '.broad_peaks.broadPeak.gz')
             symlink(os.path.join(MD_DIR, alignments), ATAQV_DIR)
-            symlink(os.path.join(MACS2_DIR, peaks), ATAQV_DIR)
+            symlink(os.path.join(MD_DIR, alignments_index), ATAQV_DIR)
+            symlink(os.path.join(MACS2_DIR, peak_file), ATAQV_DIR)
 
             ataqv_options = ["""{} '{}'""".format(k, v) for k, v in sorted({
                 '--description': DESCRIPTION,
@@ -586,6 +709,13 @@ def ataqv(use_autosomal_reference_files=False):
 
             if use_autosomal_reference_files:
                 ataqv_options.append('--autosomal-reference-file {}'.format(autosomal_reference_filename))
+
+            tss_file = TSS_REFERENCES.get(library['reference_genome'])
+            if tss_file:
+                if threads == 'auto':
+                    threads = len(AUTOSOMAL_REFERENCES[library['reference_genome']])
+
+                ataqv_options.append('--threads {} --tss-file {}'.format(threads, tss_file))
 
             if library['reference_genome'] in EXCLUDED_REGIONS:
                 for excluded_region_file in sorted(EXCLUDED_REGIONS[library['reference_genome']]):
@@ -597,6 +727,8 @@ def ataqv(use_autosomal_reference_files=False):
 
             metrics_file = make_read_group_file(library_name, rg, '.ataqv.json.gz')
             output_file = make_read_group_file(library_name, rg, '.ataqv.out')
+
+            printp("""\n# drmr:job nodes=1 processors={} memory=8g working_directory={} time_limit=4h""".format(threads, ATAQV_DIR))
             printp(ATAQV_TEMPLATE.format(**locals()), timed=True, ioniced=True)
 
 
@@ -638,5 +770,11 @@ if __name__ == '__main__':
     macs2(exclude_blacklisted_regions=True)
 
     printp("""\n# drmr:wait""")
+
+    normalize_macs2_treatment_pileups()
+
+    make_macs2_treatment_pileup_bigwigs()
+
+    make_track_lines()
 
     ataqv()
