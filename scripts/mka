@@ -503,6 +503,7 @@ if __name__ == '__main__':
     analysis_name = args.name or os.path.basename(control_path)
     description = args.description and args.description.replace('"', r'\"').replace("'", "\'") or ''
     template_context = {
+        'AUTHOR': os.getenv('LOGNAME'),
         'DESCRIPTION': description,
         'CONTROL_PATH': control_path,
         'ANALYSIS_PATH': analysis_path,

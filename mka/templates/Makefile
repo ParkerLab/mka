@@ -3,13 +3,14 @@
 #
 
 ANALYSIS_NAME = {{ANALYSIS_NAME}}
+DESCRIPTION = {{DESCRIPTION}}
 CONTROL_PATH = {{CONTROL_PATH}}
 ANALYSIS_PATH = {{ANALYSIS_PATH}}
 DATA_PATH = {{ANALYSIS_PATH}}/data
 WORK_PATH = {{ANALYSIS_PATH}}/work
 CANCEL_SCRIPT = {{ANALYSIS_PATH}}/work/.drmr/{{ANALYSIS_NAME}}.cancel
 
-.PHONY: run cancel clean clean_data clean_pipeline clean_work github_repo wiki_page
+.PHONY: run cancel clean clean_data clean_pipeline clean_work github_repo
 
 pipeline: $(ANALYSIS_PATH)/pipeline
 
@@ -41,7 +42,4 @@ clean_work:
 	@read -p "Enter 'yes' if you really want to delete your work tree: " ANSWER && test "yesx" = "$${ANSWER}x" && rm -rf $(WORK_PATH) && echo "Work tree deleted." || echo "OK, not deleting anything."
 
 github_repo:
-	@hub create -p ParkerLab/$(ANALYSIS_NAME) && git push --set-upstream origin master
-
-wiki_page:
-	@(cat README.mediawiki; printf "\nIn progress at $$(hostname):$$(/bin/pwd)\n\n") | create_wiki_page "$(ANALYSIS_NAME)" -
+	@hub create -p ParkerLab/$(ANALYSIS_NAME) -d "$(DESCRIPTION)" && git push --set-upstream origin master

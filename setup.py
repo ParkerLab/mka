@@ -19,7 +19,7 @@ test_requirements = []
 
 setup(
     name='mka',
-    version='0.7.2',
+    version='0.7.3',
     description="Generates analysis pipelines from templates.",
     long_description=readme + '\n\n',
     author="The Parker Lab",

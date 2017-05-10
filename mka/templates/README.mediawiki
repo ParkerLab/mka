@@ -1,5 +1,7 @@
 == Parker Lab Analysis: {{ANALYSIS_NAME}} ==
 
+{{DESCRIPTION}}
+
 The analysis is configured in <code>commands</code>. That script
 should link the initial data into the analysis directory and generate
 the pipeline commands into the file <code>pipeline</code>, which is
@@ -14,10 +16,5 @@ you started:
 * <code>make cancel</code> will use <code>drmr</code>'s cancel script to cancel the running pipeline.
 * <code>make clean</code> will remove the pipeline script, and the entire <code>data</code> and <code>work</code> directory.
 * <code>make github_repo</code> will create a GitHub repository for the analysis and push the code there.
-* <code>make wiki_page</code> will create a new page in the Parker Lab wiki for the analysis.
-
-More information on this analysis should be available in the Parker Lab wiki:
-
-https://theparkerlab.med.umich.edu/wiki/{{ANALYSIS_WIKINAME}}
 
 Contact {{AUTHOR}}@umich.edu if you have questions.
