@@ -8,7 +8,6 @@ CONTROL_PATH = {{CONTROL_PATH}}
 ANALYSIS_PATH = {{ANALYSIS_PATH}}
 DATA_PATH = {{ANALYSIS_PATH}}/data
 WORK_PATH = {{ANALYSIS_PATH}}/work
-CANCEL_SCRIPT = {{ANALYSIS_PATH}}/work/.drmr/{{ANALYSIS_NAME}}.cancel
 
 .PHONY: run cancel clean clean_data clean_pipeline clean_work github_repo
 
@@ -23,11 +22,8 @@ $(ANALYSIS_PATH)/pipeline: $(CONTROL_PATH)/commands
 run: $(ANALYSIS_PATH)/pipeline
 	@cd $(WORK_PATH) && drmr -j $(ANALYSIS_NAME) --mail-at-finish --mail-on-error $(ANALYSIS_PATH)/pipeline
 
-$(CANCEL_SCRIPT):
-	@mkdir -p `dirname $(CANCEL_SCRIPT)` && echo 'printf "\nThe pipeline has not been started in the usual way.\nYou will have to delete any running jobs manually.\n\n"' > $(CANCEL_SCRIPT)
-
 cancel: $(CANCEL_SCRIPT)
-	@cd $(WORK_PATH) && sh $(CANCEL_SCRIPT)
+	@drmrm -j $(ANALYSIS_NAME)
 
 clean:
 	@read -p "Enter 'yes' if you really want to delete your pipeline, data and work: " ANSWER && test "yesx" = "$${ANSWER}x" && rm -rf $(ANALYSIS_PATH)/pipeline $(DATA_PATH) $(WORK_PATH) && echo "All clean." || echo "OK, not deleting anything."
