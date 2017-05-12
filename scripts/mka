@@ -4,7 +4,7 @@
 # mka: make analysis
 #
 # Creates a control directory for an analysis, ready for customization
-# and publication to GitHub and our wiki.
+# and publication to GitHub.
 #
 
 from __future__ import print_function
@@ -53,7 +53,6 @@ ANALYSIS_SPECIFIC_LIBRARY_OPTIONS = {
 TEMPLATES = [
     '.gitignore',
     'Makefile',
-    'README.mediawiki',
     'commands',
 ]
 
@@ -455,7 +454,7 @@ def parse_arguments():
     parser.add_argument('-i', '--interactive', action='store_true', help='Prompt for library metadata, instead of just inferring from filenames.')
     parser.add_argument('-l', '--library-defaults', help='A JSON file containing default metadata to use for all libraries. This will override metadata parsed from the file supplied with the --run-info option.')
     parser.add_argument('-t', '--analysis-type', choices=SUPPORTED_ANALYSES, help='The type of pipeline to create.')
-    parser.add_argument('-n', '--name', required=False, help="""The name for the analysis and its wiki page (default: derived from the control directory).""")
+    parser.add_argument('-n', '--name', required=False, help="""The name for the analysis (default: derived from the control directory).""")
     parser.add_argument('-r', '--run-info', help='The path to a "run info" CSV file included with results from the UM DNA Sequencing Core. Library metadata will be supplemented with the run info. This metadata will be overridden with any supplied with --library-defaults or parsed from library FASTQ files.')
     parser.add_argument('control_path', help='The directory for the control files.')
     parser.add_argument('libraries', metavar='library', nargs='+', help='One or more FASTQ files containing sequenced libraries.')
@@ -508,7 +507,6 @@ if __name__ == '__main__':
         'CONTROL_PATH': control_path,
         'ANALYSIS_PATH': analysis_path,
         'ANALYSIS_NAME': analysis_name,
-        'ANALYSIS_WIKINAME': analysis_name.title(),
         'LIBRARIES': describe_libraries(libraries, args.analysis_type, args.interactive, args.library_defaults, args.run_info)
     }
 
