@@ -9,9 +9,8 @@ Features
 ========
 
 * Its output is a ready-to-go analysis: just run ``make run`` to start
-  it. The Makefile includes targets for cleaning your data, creating a
-  GitHub repository for the analysis, or creating a MediaWiki page for
-  it.
+  it. The Makefile also includes targets for cleaning your work
+  directories and creating a GitHub repository for the analysis.
 
 * Generates Python scripts that in turn generate your pipeline. These
   scripts tend to be more robust and easier to customize than shell
@@ -50,7 +49,6 @@ https://github.com/ParkerLab/mka/``:
 
 * Jinja2
 * dateparser
-* mwclient (if you wish to add a page for your analysis to a MediaWiki instance)
 
 Pipeline requirements
 ---------------------
@@ -59,6 +57,7 @@ Pipeline requirements
 * `cta`_, our C++ version of Jason Buenrostro's adapter trimmer
 * `bwa`_
 * `MACS2`_
+* `bedtools`_
 * `samtools`_
 * `drmr`_, our tool for working with resource managers like Slurm or
   PBS
@@ -195,6 +194,7 @@ when it finishes, or if any job encounters an error.
 .. _cta: https://github.com/ParkerLab/cta/
 .. _bwa: http://bio-bwa.sourceforge.net/
 .. _MACS2: https://github.com/taoliu/MACS
+.. _bedtools: http://bedtools.readthedocs.io/en/latest/
 .. _samtools: http://samtools.sourceforge.net/
 .. _drmr: https://github.com/ParkerLab/drmr/
 .. _hub: https://github.com/github/hub
