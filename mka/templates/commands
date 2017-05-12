@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
 #
-# This commands template needs customization wherever you see CHANGES
-# REQUIRED. Where you see CHANGES RECOMMENDED, check that section to
-# make sure it works for your pipeline.
+# This template is a very minimal example. Look at the ATAC-seq or
+# RNA-seq files for more realistic starting points for your own
+# analysis templates.
 #
 
 from __future__ import print_function
@@ -16,10 +16,7 @@ import os
 DEFAULT_DIRECTORY_MODE = 0750
 
 ANALYSIS_NAME = "{{ANALYSIS_NAME}}"
-ANALYSIS_BASENAME = "{{ANALYSIS_NAME}}"
-ANALYSIS_SUBJECT = "{{ANALYSIS_NAME}} SUBJECT NOT SPECIFIED"
-ANALYSIS_GROUP = "{{ANALYSIS_NAME}} GROUP NOT SPECIFIED"
-
+DESCRIPTION = """{{DESCRIPTION}}"""
 CONTROL_PATH = "{{CONTROL_PATH}}"
 ANALYSIS_PATH = "{{ANALYSIS_PATH}}"
 DATA_PATH = os.path.join(ANALYSIS_PATH, 'data')
@@ -30,7 +27,7 @@ PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
 # I/O-intensive jobs that run at once, to keep the machine
 # responsive. If you're running on dedicated cluster nodes, you
 # probably want to set this to False.
-LIMIT_IO = True
+LIMIT_IO = 8
 
 
 #
@@ -39,33 +36,11 @@ LIMIT_IO = True
 #
 
 
-def iterate_data(data, keys=[]):
-    """
-    Iterate the entire data dictionary, returning a list for each leaf node.
-
-    Each list in the returned list contains all the keys leading to
-    the leaf node, maybe something like:
-
-    [[organism, cell type, sample, file], [organism, cell type, sample, file], ...]
-    """
-    results = []
-    for key, values in sorted(data.items()):
-        if isinstance(values, collections.Mapping):
-            for result in iterate_data(values, keys=keys + [key]):
-                results.append(result)
-        elif isinstance(values, collections.Sequence):
-            for value in sorted(values):
-                results.append(keys + [key, value])
-        else:
-            results.append(keys + [key] + [values])
-    return results
-
-
 def maybe_gzip(filename, limit_io=LIMIT_IO):
     """Compress a file with gzip."""
     template_data = {
         'f': filename,
-        'ionice': limit_io and 'ionice -c 3 ' or ''
+        'ionice': limit_io and 'ionice -c2 -n7 ' or ''
     }
 
     command_template = """if [ -r "{f}" ]; then {ionice}gzip -f "{f}"; elif [ -r "{f}".gz ]; then echo '"{f}" already gzipped.'; fi"""
@@ -85,7 +60,7 @@ def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
         if timed:
             pipeline_file.write('/usr/bin/time -v ')
         if ioniced:
-            pipeline_file.write('ionice -c3 ')
+            pipeline_file.write('ionice -c2 -n7 ')
         pipeline_file.write(text)
         pipeline_file.write('\n')
 
@@ -110,91 +85,9 @@ def symlink(source_path, dest_path):
     return dest, dest_base
 
 
-#
-#  End of generic, beginning of analysis-specific functions.
-#
-
-
-def gzip_macs2_output(root):
-    """
-    Gzip all the MACS2 output we request in ATAC-seq pipelines.
-    """
-    maybe_gzip("{}.broad_peaks.broadPeak".format(root))
-    maybe_gzip("{}.broad_peaks.gappedPeak".format(root))
-    maybe_gzip("{}.broad_control_lambda.bdg".format(root))
-    maybe_gzip("{}.broad_treat_pileup.bdg".format(root))
-
-    maybe_gzip("{}.summit_summits.bed".format(root))
-    maybe_gzip("{}.summit_peaks.narrowPeak".format(root))
-    maybe_gzip("{}.summit_control_lambda.bdg".format(root))
-    maybe_gzip("{}.summit_treat_pileup.bdg".format(root))
-
-
-def iterate_samples(data):
-    """
-    Iterate the second level of the data dictionary, which in this example pipeline contains samples and their files.
-
-    CHANGES RECOMMENDED: Check this to make sure it's what you want!
-    """
-    for key, values in sorted(data.items()):
-        for sample, files in sorted(values.items()):
-            yield sample, sorted(files)
-
-
-def list_files(data):
-    """List all the base files (leaf nodes) of the data dictionary."""
-    return [item[-1] for item in iterate_data(data)]
-
-
-def list_fastq_pairs(data, suffix='.fq.gz'):
-    """Uses the base files (leaf nodes) of the data dictionary to create pairs of plausible FASTQ filenames.
-
-    CHANGES RECOMMENDED: Check this to make sure it's what you want!
-    """
-    pairs = []
-    for f in list_files(data):
-        fastq1 = f + '_1' + suffix
-        fastq2 = f + '_2' + suffix
-        pairs.append([fastq1, fastq2])
-    return pairs
-
-
-def list_source_fastq_pairs(data, source_data_path, suffix='.fq.gz'):
-    source_fastq_pairs = []
-    add_path = functools.partial(os.path.join, source_data_path)
-    for fastq_pair in list_fastq_pairs(data, suffix):
-        source_fastq_pairs.append(map(add_path, fastq_pair))
-    return source_fastq_pairs
-
-
-#
-# End of analysis-specific functions.
-#
-
-# CHANGES REQUIRED
-SOURCE_DATA_PATH = '/lab/data/'
-
-# The DATA hierarchy is used to group analysis products. It can be a
-# single level, mapping your analysis name to a single list
-# representing the sequence files, or you can make it as complex a
-# tree as necessary, e.g. organism -> cell type -> sample -> file
-
-# The hierarchy can be used to roll up analysis products from lower
-# levels. For example, the BAM files from aligning the reads in the
-# individual files can be merged into one BAM file per sample. Those
-# can then be rolled up into a file per cell type, and so on.
-DATA = {}
-
 if __name__ == '__main__':
     print('Creating DATA_PATH {}'.format(DATA_PATH))
     mkdir(DATA_PATH)
-
-    for fastq_pair in list_source_fastq_pairs(DATA, SOURCE_DATA_PATH, suffix='.fastq.gz'):
-        for source_file in fastq_pair:
-            dest = os.path.join(DATA_PATH, os.path.basename(source_file).replace('.fastq.gz', '.fq.gz'))
-            print('Linking original FASTQ file {} to {}'.format(source_file, dest))
-            symlink(source_file, dest)
-
     mkdir(WORK_PATH)
 
     if os.path.exists(PIPELINE):
@@ -203,7 +96,7 @@ if __name__ == '__main__':
     PIPELINE_FILE = open(PIPELINE, 'w')
     printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
 
-    printp("""#!/usr/bin/env drmr -j {{ANALYSIS_BASENAME}}""")
+    printp("""#!/bin/bash""")
     printp("""# -*- mode: sh; coding: utf-8 -*-\n""")
 
     #
