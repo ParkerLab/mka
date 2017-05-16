@@ -1,0 +1,104 @@
+#!/bin/bash
+
+#
+# mkgi: make genome index
+#
+# Creates indexes for mka-supported assay types. Uses bwa for
+# ATAC-seq, STAR for RNA-seq.
+#
+
+function perror() {
+    >&2 printf "$1\n"
+}
+
+show_help() {
+    perror
+    perror "Usage:"
+    perror "  ${0} INDEX_TYPE GENOME_NAME GENOME_FILE REF_ROOT [SJ_GTF]"
+    perror
+    perror "  where:"
+    perror "    INDEX_TYPE is either 'bwa' or 'STAR'"
+    perror "    ORGANISM is the name of the reference genome organism: 'human', 'mouse', etc."
+    perror "    GENOME_NAME is the name of the reference genome: 'hg19', 'mm9', etc."
+    perror "    GENOME_FILE is the FASTA file containing the reference genome"
+    perror "    REF_ROOT is the top of the directory tree containing reference genomes"
+    perror "    SJ_GTF is a GTF file of splice junction annotations, only used for STAR"
+    perror
+    perror "If submitting under a workload manager like PBS or Slurm, bwa should be given"
+    perror "two hours and 8GB of memory. STAR should also finish in two hours, with 32GB."
+    exit 0
+}
+
+if [[ 5 -ne $# && 6 -ne $# ]]
+then
+    show_help
+    exit 1
+fi
+
+INDEX_TYPE=$1
+ORGANISM=$2
+GENOME_NAME=$3
+GENOME_FILE=$(readlink -m $4)
+REF_ROOT=$(readlink -m $5)
+
+SJ_GTF=""
+if [[ 6 -eq $# ]]
+then
+    SJ_GTF=$(readlink -m $6)
+fi
+
+function make_bwa_index() {
+    BWA=$(which bwa)
+    if [ -z $BWA ]
+    then
+        perror "bwa is not on your PATH."
+        exit 1
+    fi
+
+    BWA_VERSION=$(bwa 2>&1 | grep Version: | sed -r -e 's/Version: //' -e 's/-.*//')
+
+    index_dir="$REF_ROOT/$ORGANISM/$GENOME_NAME/index/bwa/$BWA_VERSION"
+    mkdir -p "$index_dir"
+
+    cp $GENOME_FILE "$index_dir/$GENOME_NAME"
+    cd $index_dir
+
+    index_cmd="bwa index -p $GENOME_NAME $GENOME_NAME"
+    $index_cmd
+}
+
+function make_star_index() {
+    STAR=$(which STAR)
+    if [ -z $STAR ]
+    then
+        perror "STAR is not on your PATH."
+        exit 1
+    fi
+
+    STAR_VERSION=$(STAR --version | sed -r -e 's/STAR_//')
+
+    index_dir="$REF_ROOT/$ORGANISM/$GENOME_NAME/index/STAR/$STAR_VERSION"
+    mkdir -p "$index_dir"
+
+    zcat $GENOME_FILE > "$index_dir/$GENOME_NAME"
+    cd $index_dir
+
+    index_cmd="STAR --runMode genomeGenerate --runThreadN 8 --genomeDir $index_dir --genomeFastaFiles $GENOME_NAME"
+    if [ $SJ_GTF ]
+    then
+        index_cmd="$index_cmd --sjdbGTFfile $SJ_GTF"
+    fi
+
+    $index_cmd
+}
+
+if [[ "bwa" = "$INDEX_TYPE" ]]
+then
+    make_bwa_index
+elif [[ "STAR" = "$INDEX_TYPE" ]]
+then
+    make_star_index
+else
+    perror "Unsupported index type: $INDEX_TYPE"
+    exit 1
+fi
