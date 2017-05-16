@@ -24,7 +24,7 @@ import jinja2
 
 
 PROGRAM = 'mka'
-PROGRAM_VERSION = '0.7.2'
+PROGRAM_VERSION = '0.8.1'
 
 LIBRARY_FILENAME_PATTERN = re.compile(
     '^(?P<sample>.*?)'
@@ -105,10 +105,14 @@ def first(seq):
 
 def read_custom_template(path):
     content = None
-    try:
-        content = open(path, 'rb').read()
-    except:
-        pass
+    if os.path.isfile(path):
+        try:
+            content = open(path, 'rb').read()
+            if not content:
+                raise ValueError
+        except:
+            logging.error('Could not load content of custom template "{}"'.format(path))
+            sys.exit(1)
 
     return content
 
@@ -129,12 +133,16 @@ def find_template(template, analysis_type=None):
     else:
         sources = [template]
 
-    custom_template_directory = os.environ.get('{}_TEMPLATES'.format(PROGRAM))
+    custom_template_directory = os.environ.get('{}_TEMPLATES'.format(PROGRAM.upper()))
+    if custom_template_directory and not os.path.isdir(custom_template_directory):
+        custom_template_directory = None
 
     templates = []
     for source in sources:
         if custom_template_directory:
-            templates.append(read_custom_template(os.path.join(custom_template_directory, source)))
+            custom_template = os.path.join(custom_template_directory, source)
+            if os.path.isfile(custom_template):
+                templates.append(read_custom_template(custom_template))
 
         try:
             templates.append(pkgutil.get_data(PROGRAM, 'templates/{}'.format(source)))
@@ -164,6 +172,10 @@ def write_template(template_context, template, destination_directory, analysis_t
 
 
 def write_templates(template_context, destination_directory, analysis_type=None):
+    custom_template_directory = os.environ.get('{}_TEMPLATES'.format(PROGRAM.upper()))
+    if custom_template_directory and not os.path.isdir(custom_template_directory):
+        logging.warn('Ignoring invalid custom template directory "{}"'.format(custom_template_directory))
+
     for template in TEMPLATES:
         write_template(template_context, template, destination_directory, analysis_type)
 

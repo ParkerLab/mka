@@ -332,6 +332,9 @@ def bwa(threads=4, algorithm='MEM', time_limit='8h'):
     for library_name, library in sorted(LIBRARIES.items()):
         reference_genome = library['reference_genome']
         bwa_reference = BWA_REFERENCES[reference_genome]
+        if not os.path.exists(bwa_reference):
+            print('BWA reference "{}" does not exist.'.format(bwa_reference), file=sys.stderr)
+            sys.exit(1)
 
         for rg, files in sorted(library['readgroups'].items()):
             fastq_files = sorted([rename_fastq('.trimmed.fq.gz', os.path.basename(f)) for f in files])
@@ -471,8 +474,16 @@ def compress_macs2_output(prefix, ioniced=True):
 
 def exclude_blacklisted_peaks(prefix, reference_genome):
     if reference_genome in EXCLUDED_REGIONS:
-        exclude_commands = ' | '.join(['intersectBed -a stdin -b {} -v'.format(erf) for erf in EXCLUDED_REGIONS[reference_genome]])
-        printp("""zcat {prefix}.broad_peaks.broadPeak.gz | {exclude_commands} | gzip -c > {prefix}.broad_peaks.broadPeak.noblacklist.gz""".format(**locals()))
+        excluded_region_files = []
+        for excluded_region_file in EXCLUDED_REGIONS[reference_genome]:
+            if os.path.isfile(excluded_region_file):
+                excluded_region_files.append(excluded_region_file)
+            else:
+                print("""Excluded region file {} for reference genome {} does not exist. It cannot be used to filter MACS2 output.""".format(excluded_region_file, reference_genome), file=sys.stderr)
+
+        exclude_commands = ' | '.join(['intersectBed -a stdin -b {} -v '.format(erf) for erf in excluded_region_files])
+        if exclude_commands:
+            printp("""zcat {prefix}.broad_peaks.broadPeak.gz | {exclude_commands} | gzip -c > {prefix}.broad_peaks.broadPeak.noblacklist.gz""".format(**locals()))
 
 
 def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libraries=False, call_samples=False):
@@ -621,6 +632,10 @@ def make_macs2_treatment_pileup_bigwigs():
 
     for library_name, library in sorted(LIBRARIES.items()):
         chromosome_sizes = get_chromosome_sizes_path(library)
+        if not os.path.isfile(chromosome_sizes):
+            print('Chromosome size file "{}" does not exist.'.format(chromosome_sizes))
+            sys.exit(1)
+
         for rg in sorted(library['readgroups'].keys()):
             prefix = make_read_group_file(library_name, rg)
             macs2_normalized_treat_pileup_bdg = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
@@ -641,7 +656,6 @@ def make_track_lines():
         track_lines_file = os.path.join(GB_DIR, 'track_lines.' + reference_genome)
         with open(track_lines_file, 'w') as track_lines:
             for library in libraries:
-                chromosome_sizes = get_chromosome_sizes_path(library)
                 for rg in sorted(library['readgroups'].keys()):
                     prefix = make_read_group_file(library['library'], rg)
                     treat_pileup_bw = '{}.broad_treat_pileup.normalized.bw'.format(prefix)
@@ -712,17 +726,24 @@ def ataqv(use_autosomal_reference_files=False, threads='auto'):
 
             tss_file = TSS_REFERENCES.get(library['reference_genome'])
             if tss_file:
-                if threads == 'auto':
-                    threads = len(AUTOSOMAL_REFERENCES[library['reference_genome']])
+                if os.path.exists(tss_file):
+                    if threads == 'auto':
+                        threads = len(AUTOSOMAL_REFERENCES[library['reference_genome']])
 
-                ataqv_options.append('--threads {} --tss-file {}'.format(threads, tss_file))
+                    ataqv_options.append('--threads {} --tss-file {}'.format(threads, tss_file))
+                else:
+                    print('TSS reference "{}" for genome "{}" not found.'.format(tss_file, library['reference_genome']), file=sys.stderr)
+                    sys.exit(1)
 
             if threads == 'auto':
                 threads = 1
 
             if library['reference_genome'] in EXCLUDED_REGIONS:
                 for excluded_region_file in sorted(EXCLUDED_REGIONS[library['reference_genome']]):
-                    ataqv_options.append('--excluded-region-file {}'.format(excluded_region_file))
+                    if os.path.isfile(excluded_region_file):
+                        ataqv_options.append('--excluded-region-file {}'.format(excluded_region_file))
+                    else:
+                        print('Excluded region file {} for reference genome {} does not exist; dropping it from ataqv commands.'.format(excluded_region_file, library['reference_genome']), file=sys.stderr)
 
             ataqv_options = ' '.join(ataqv_options)
 
