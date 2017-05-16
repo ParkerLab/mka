@@ -717,6 +717,9 @@ def ataqv(use_autosomal_reference_files=False, threads='auto'):
 
                 ataqv_options.append('--threads {} --tss-file {}'.format(threads, tss_file))
 
+            if threads == 'auto':
+                threads = 1
+
             if library['reference_genome'] in EXCLUDED_REGIONS:
                 for excluded_region_file in sorted(EXCLUDED_REGIONS[library['reference_genome']]):
                     ataqv_options.append('--excluded-region-file {}'.format(excluded_region_file))
