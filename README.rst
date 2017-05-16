@@ -67,6 +67,10 @@ Other requirements
 
 * `hub`_, if you want to create a GitHub repository for your analysis
 
+Installation
+============
+
+   ``pip install git+https://github.com/ParkerLab/mka``
 
 Examples
 ========
