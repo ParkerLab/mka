@@ -12,14 +12,14 @@ readme = open('README.rst').read()
 
 requirements = [
     'Jinja2',
-    'dateparser'
+    'python-dateutil'
 ]
 
 test_requirements = []
 
 setup(
     name='mka',
-    version='0.8.1',
+    version='0.8.2',
     description="Generates analysis pipelines from templates.",
     long_description=readme + '\n\n',
     author="The Parker Lab",

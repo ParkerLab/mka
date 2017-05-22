@@ -306,8 +306,8 @@ def trim_adapters():
         for rg, files in sorted(library['readgroups'].items()):
             for f in sorted(files):
                 symlink(os.path.join(DATA_PATH, os.path.basename(f)), TRIM_ADAPTER_DIR)
-            bases = [os.path.basename(f) for f in sorted(files)]
-            printp("""cta {} {}""".format(*bases), timed=True, ioniced=True)
+            bases = ' '.join(os.path.basename(f) for f in sorted(files))
+            printp("""cta {}""".format(bases), timed=True, ioniced=True)
             index += 1
 
             if LIMIT_IO and index % LIMIT_IO == 0:

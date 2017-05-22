@@ -19,7 +19,7 @@ import subprocess
 import sys
 import textwrap
 
-import dateparser
+import dateutil.parser
 import jinja2
 
 
@@ -206,15 +206,6 @@ def parse_library_filename(library_file):
     }
 
 
-NUMERIC_DATE_RE = re.compile('(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})')
-def parsedate(dtstring):
-    m = NUMERIC_DATE_RE.match(dtstring)
-    if m:
-        dtstring = '{year}-{month}-{day}'.format(**m.groupdict())
-
-    return dateparser.parse(dtstring, settings={'PREFER_DATES_FROM': 'past'})
-
-
 def read_runinfo(filename):
     """
     Reads the CSV containing run info.
@@ -243,7 +234,7 @@ def read_runinfo(filename):
             else:
                 if line.startswith('Date,'):
                     sequencing_date = line.split(',')[1]
-                    sequencing_date = parsedate(sequencing_date)
+                    sequencing_date = dateutil.parser.parse(sequencing_date)
                     if sequencing_date:
                         common_info['sequencing_date'] = sequencing_date.date().isoformat()
 
@@ -358,7 +349,7 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         date_ok = False
         sequencing_date = metadata['sequencing_date']
         while sequencing_date and not date_ok:
-            sequencing_date = parsedate(sequencing_date)
+            sequencing_date = dateutil.parser.parse(sequencing_date)
             if sequencing_date:
                 metadata['sequencing_date'] = sequencing_date.date().isoformat()
                 date_ok = True
