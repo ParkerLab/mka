@@ -48,7 +48,7 @@ These should automatically be installed by pip when you ``pip install
 https://github.com/ParkerLab/mka/``:
 
 * Jinja2
-* dateparser
+* python-dateutil
 
 Pipeline requirements
 ---------------------
