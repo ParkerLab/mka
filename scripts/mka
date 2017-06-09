@@ -24,7 +24,7 @@ import jinja2
 
 
 PROGRAM = 'mka'
-PROGRAM_VERSION = '0.8.2'
+PROGRAM_VERSION = '0.8.3'
 
 LIBRARY_FILENAME_PATTERN = re.compile(
     '^(?P<sample>.*?)'
@@ -465,6 +465,50 @@ def parse_arguments():
     return parser.parse_args()
 
 
+def shquote(arg):
+    return """'{}'""".format(arg.replace("'", "\'"))
+
+    # use single quotes, and put single quotes into double quotes
+    # the string $'b is then quoted as '$'"'"'b'
+    # return "'" + s.replace("'", "'\"'\"'") + "'"
+
+def reconstruct_command_line(args):
+    command_line = [sys.argv[0]]
+    if args.analysis_path:
+        command_line.append('--analysis-path')
+        command_line.append(os.path.normpath(os.path.abspath(args.analysis_path)))
+
+    if args.analysis_type:
+        command_line.append('--analysis-type')
+        command_line.append(shquote(args.analysis_type))
+
+    if args.description:
+        command_line.append('--description')
+        command_line.append(shquote(args.description))
+
+    if args.interactive:
+        command_line.append('--interactive')
+
+    if args.library_defaults:
+        command_line.append('--library-defaults')
+        command_line.append(os.path.normpath(os.path.abspath(args.library_defaults)))
+
+    if args.name:
+        command_line.append('--name')
+        command_line.append(shquote(args.name))
+
+    if args.run_info:
+        command_line.append('--run-info')
+        command_line.append(os.path.normpath(os.path.abspath(args.run_info)))
+
+    command_line.append(os.path.normpath(os.path.abspath(args.control_path)))
+
+    for library in args.libraries:
+        command_line.append(os.path.normpath(os.path.abspath(library)))
+
+    return ' '.join(command_line)
+
+
 if __name__ == '__main__':
 
     args = parse_arguments()
@@ -505,12 +549,14 @@ if __name__ == '__main__':
     analysis_name = args.name or os.path.basename(control_path)
     description = args.description and args.description.replace('"', r'\"').replace("'", "\'") or ''
     template_context = {
-        'AUTHOR': os.getenv('LOGNAME'),
-        'DESCRIPTION': description,
-        'CONTROL_PATH': control_path,
         'ANALYSIS_PATH': analysis_path,
         'ANALYSIS_NAME': analysis_name,
-        'LIBRARIES': describe_libraries(libraries, args.analysis_type, args.interactive, args.library_defaults, args.run_info)
+        'AUTHOR': os.getenv('LOGNAME'),
+        'CONTROL_PATH': control_path,
+        'DESCRIPTION': description,
+        'LIBRARIES': describe_libraries(libraries, args.analysis_type, args.interactive, args.library_defaults, args.run_info),
+        'MKA_COMMAND_LINE': reconstruct_command_line(args),
+        'MKA_CWD': os.getcwd(),
     }
 
     if not os.path.exists(control_path):

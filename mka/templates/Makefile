@@ -2,6 +2,16 @@
 # Makefile for Parker Lab analysis {{ANALYSIS_NAME}}
 #
 
+#
+# This analysis was generated with this mka command:
+#
+# {{MKA_COMMAND_LINE}}
+#
+# run in this directory:
+#
+# {{MKA_CWD}}
+#
+
 ANALYSIS_NAME = {{ANALYSIS_NAME}}
 DESCRIPTION = {{DESCRIPTION}}
 CONTROL_PATH = {{CONTROL_PATH}}
@@ -9,7 +19,7 @@ ANALYSIS_PATH = {{ANALYSIS_PATH}}
 DATA_PATH = {{ANALYSIS_PATH}}/data
 WORK_PATH = {{ANALYSIS_PATH}}/work
 
-.PHONY: run cancel clean clean_data clean_pipeline clean_work github_repo
+.PHONY: run cancel clean all_clean clean_data clean_pipeline clean_work github_repo
 
 pipeline: $(ANALYSIS_PATH)/pipeline
 
@@ -26,6 +36,9 @@ cancel: $(CANCEL_SCRIPT)
 	@drmrm -j $(ANALYSIS_NAME)
 
 clean:
+	@read -p "Enter 'yes' if you really want to delete your pipeline and work directory: " ANSWER && test "yesx" = "$${ANSWER}x" && rm -rf $(ANALYSIS_PATH)/pipeline $(WORK_PATH) && echo "All clean." || echo "OK, not deleting anything."
+
+all_clean:
 	@read -p "Enter 'yes' if you really want to delete your pipeline, data and work: " ANSWER && test "yesx" = "$${ANSWER}x" && rm -rf $(ANALYSIS_PATH)/pipeline $(DATA_PATH) $(WORK_PATH) && echo "All clean." || echo "OK, not deleting anything."
 
 clean_data:

@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 
 #
-# This commands template needs customization wherever you see CHANGES
-# REQUIRED. Where you see CHANGES RECOMMENDED, check that section to
-# make sure it works for your pipeline.
+# This analysis was generated with this mka command:
+#
+# {{MKA_COMMAND_LINE}}
+#
+# run in this directory:
+#
+# {{MKA_CWD}}
 #
 
 from __future__ import print_function
@@ -172,13 +176,13 @@ def working_directory(path):
         os.chdir(original_directory)
 
 
-def symlink(source_path, dest_path, abs=False):
+def symlink(source_path, dest_path, absolute=False):
     """Create a symbolic link from the source_path to the dest_path, which can be a directory."""
 
     workdir = os.path.isdir(dest_path) and dest_path or os.path.dirname(dest_path)
 
     with working_directory(workdir):
-        src = abs and os.path.abspath(source_path) or os.path.relpath(source_path, dest_path)
+        src = os.path.normpath(absolute and os.path.abspath(source_path) or os.path.relpath(source_path, dest_path))
         dest = dest_path
         dest_base = os.path.basename(dest)
         if os.path.isdir(dest_path):
@@ -686,7 +690,7 @@ def make_track_lines():
         install.write("""ssh vs mkdir -p {} && rsync -avL --exclude install.sh {}/ vs:{}/ && ssh vs "chmod 755 {}; chmod 644 {}/*"\n""".format(vs_dir, GB_DIR, vs_dir, vs_dir, vs_dir))
 
 
-def ataqv(use_autosomal_reference_files=False, threads='auto'):
+def ataqv(use_autosomal_reference_files=False, threads=4):
     """
     Run ataqv for each library.
     """
@@ -698,7 +702,6 @@ def ataqv(use_autosomal_reference_files=False, threads='auto'):
 
     ATAQV_TEMPLATE = """ataqv --peak-file {peak_file} --metrics-file {metrics_file} --name 'Library {library_name}, read group {rg}' {ataqv_options} {organism} {alignments} > {output_file}\n"""
 
-    orig_threads = threads
     for library_name, library in sorted(LIBRARIES.items()):
         if use_autosomal_reference_files:
             autosomal_reference_filename = os.path.join(ATAQV_DIR, '{}.arf'.format(library_name))
@@ -727,16 +730,10 @@ def ataqv(use_autosomal_reference_files=False, threads='auto'):
             tss_file = TSS_REFERENCES.get(library['reference_genome'])
             if tss_file:
                 if os.path.exists(tss_file):
-                    if threads == 'auto':
-                        threads = len(AUTOSOMAL_REFERENCES[library['reference_genome']])
-
-                    ataqv_options.append('--threads {} --tss-file {}'.format(threads, tss_file))
+                    ataqv_options.append('--tss-file {}'.format(tss_file))
                 else:
                     print('TSS reference "{}" for genome "{}" not found.'.format(tss_file, library['reference_genome']), file=sys.stderr)
                     sys.exit(1)
-
-            if threads == 'auto':
-                threads = 1
 
             if library['reference_genome'] in EXCLUDED_REGIONS:
                 for excluded_region_file in sorted(EXCLUDED_REGIONS[library['reference_genome']]):
@@ -762,7 +759,7 @@ if __name__ == '__main__':
 
     for source_file in iterate_all_source_files():
         dest = os.path.join(DATA_PATH, os.path.basename(source_file))
-        symlink(source_file, dest, abs=True)
+        symlink(source_file, dest, absolute=True)
 
     if os.path.exists(PIPELINE):
         os.unlink(PIPELINE)

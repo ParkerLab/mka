@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 
 #
-# This commands template needs customization wherever you see CHANGES
-# REQUIRED. Where you see CHANGES RECOMMENDED, check that section to
-# make sure it works for your pipeline.
+# This analysis was generated with this mka command:
+#
+# {{MKA_COMMAND_LINE}}
+#
+# run in this directory:
+#
+# {{MKA_CWD}}
 #
 
 from __future__ import print_function
@@ -40,6 +44,8 @@ PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
 FASTQC_DIR = os.path.join(WORK_PATH, 'fastqc')
 STAR_DIR = os.path.join(WORK_PATH, 'star')
 QORTS_DIR = os.path.join(WORK_PATH, 'qorts')
+TRACK_DIR = os.path.join(WORK_PATH, 'tracks')
+TRIM_ADAPTER_DIR = os.path.join(WORK_PATH, 'trim_adapters')
 
 # By default, we use ionice and limit the number of particularly
 # I/O-intensive jobs that run at once, to keep the machine
@@ -99,13 +105,13 @@ def working_directory(path):
         os.chdir(original_directory)
 
 
-def symlink(source_path, dest_path, abs=False):
+def symlink(source_path, dest_path, absolute=False):
     """Create a symbolic link from the source_path to the dest_path, which can be a directory."""
 
     workdir = os.path.isdir(dest_path) and dest_path or os.path.dirname(dest_path)
 
     with working_directory(workdir):
-        src = abs and os.path.abspath(source_path) or os.path.relpath(source_path)
+        src = os.path.normpath(absolute and os.path.abspath(source_path) or os.path.relpath(source_path, dest_path))
         dest = dest_path
         dest_base = os.path.basename(dest)
         if os.path.isdir(dest_path):
@@ -134,7 +140,7 @@ def iterate_library_source_files(library_name):
 
 
 def iterate_all_source_files():
-    return itertools.chain(*[iterate_library_source_files(library_name) for library_name in sorted(LIBRARIES.keys()) ])
+    return itertools.chain(*[iterate_library_source_files(library_name) for library_name in sorted(LIBRARIES.keys())])
 
 
 def iterate_library_files(library_name):
@@ -195,6 +201,33 @@ def fastqc():
             printp("""\n# drmr:wait""")
 
 
+def trim_adapters():
+    #
+    # Trim adapter sequence from the FASTQ files
+    #
+
+    mkdir(TRIM_ADAPTER_DIR)
+
+    printp("""\n#\n# trim adapter sequence from reads\n#""")
+    printp("""\n# drmr:label trim-adapters""")
+    printp("""\n# drmr:job time_limit=4h working_directory={}""".format(TRIM_ADAPTER_DIR))
+
+    index = 0
+    for name, library in sorted(LIBRARIES.items()):
+        for rg, files in sorted(library['readgroups'].items()):
+            for f in sorted(files):
+                symlink(os.path.join(DATA_PATH, os.path.basename(f)), TRIM_ADAPTER_DIR)
+            bases = ' '.join(os.path.basename(f) for f in sorted(files))
+            printp("""cta {}""".format(bases), timed=True, ioniced=True)
+            index += 1
+
+            if LIMIT_IO and index % LIMIT_IO == 0:
+                # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
+                printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:wait""")
+
+
 def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
     if mapping_template is None:
         mapping_template = """STAR --runThreadN {} --readFilesCommand gunzip -cf --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --outSAMattrRGline {} --readFilesIn {}"""
@@ -207,14 +240,14 @@ def star(mapping_template=None, threads=16, memory=32, max_star_instances=0):
 
         for library in libraries:
             for rg, files in sorted(library['readgroups'].items()):
-                files = sorted(files)
+                fastq_files = sorted([rename_fastq('.trimmed.fq.gz', os.path.basename(f)) for f in files])
                 star_dir = os.path.join(STAR_DIR, make_read_group_path(library['library'], rg))
                 mkdir(star_dir)
 
-                for f in files:
-                    symlink(f, star_dir)
+                for f in fastq_files:
+                    symlink(os.path.join(TRIM_ADAPTER_DIR, f), star_dir)
 
-                fastq_files = [os.path.basename(f) for f in files]
+                fastq_files = [os.path.basename(f) for f in fastq_files]
 
                 printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
                 printp(mapping_template.format(threads, star_reference, make_read_group_header(library, rg), ' '.join(fastq_files)), timed=True, ioniced=True)
@@ -275,7 +308,7 @@ def qorts(command_template=None, threads=4, memory=12):
         gtf = os.path.join(star_reference, 'annotation.gtf')
 
         strand_options = ''
-        library_strand = library['analysis_specific_options']['strand']
+        library_strand = library['analysis_specific_options'].get('strand')
         if library_strand == 'fr-firststrand':
             strand_options = '--stranded'
         elif library_strand == 'fr-secondstrand':
@@ -335,6 +368,150 @@ def qorts_wig2bigwig(command_template=None, memory=1):
                 printp(command_template.format(**locals()))
 
 
+def make_r1ss_tracks():
+    """Run merge_star_samples before this."""
+
+    printp('\n#\n# Make read1 start site tracks\n#')
+    printp('\n# drmr:label r1ss')
+
+    mkdir(TRACK_DIR)
+    samples_dir = os.path.join(STAR_DIR, 'samples')
+
+    #
+    # Index the sample BAMs
+    #
+    printp('\n# drmr:label index-sample-bams')
+    printp('\n# drmr:job time_limit=1h processors=1 memory=8g working_directory={}'.format(samples_dir))
+    for index, sample in enumerate(sorted(SAMPLES.keys()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        sample_bam = '{}.bam'.format(sample)
+        printp("samtools index " + os.path.basename(sample_bam))
+
+    printp('\n# drmr:wait')
+
+    strand_filters = {
+        'fwd': '-f 99 -F 16',  # -f 99: read paired, read mapped in proper pair, mate reverse strand, first in pair; -F 16 not read reverse strand
+        'rev': '-f 83 -F 32'   # -f 83: read paired, read mapped in proper pair, read reverse strand, first in pair; -F 32 not mate reverse strand
+    }
+
+    filter_template = """(export CHROMOSOMES=$(samtools view -H {input_bam} | grep '^@SQ' | cut -f 2 | grep -v -e s_ -e chrM -e chrY -e 'VN:' | sed 's/SN://' | xargs echo); samtools view -b -h {filters} -f 3 -F 4 -F 8 -q 255 {input_bam} $CHROMOSOMES > {output_bam})"""
+
+    #
+    # Prune the sample BAMs to quality 255 properly paired and mapped autosomal reads
+    #
+    printp('\n# drmr:label prune-sample-bams')
+    printp('\n# drmr:job time_limit=1h processors=1 memory=8g working_directory={}'.format(TRACK_DIR))
+    for index, sample in enumerate(sorted(SAMPLES.keys()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        input_bam = '{}.bam'.format(sample)
+        sample_bam = os.path.join(samples_dir, input_bam)
+        sample_bam_index = sample_bam + '.bai'
+        symlink(sample_bam, TRACK_DIR)
+        symlink(sample_bam_index, TRACK_DIR)
+        for strand in ['fwd', 'rev']:
+            filters = strand_filters[strand]
+            output_bam = '{sample}.read1.{strand}.pruned.bam'.format(**locals())
+            printp(filter_template.format(**locals()))
+
+    printp('\n# drmr:wait')
+
+    #
+    # Index the pruned BAMs
+    #
+    printp('\n# drmr:label index-pruned')
+    for index, sample in enumerate(sorted(SAMPLES.keys()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        for strand in ['fwd', 'rev']:
+            bam = '{sample}.read1.{strand}.pruned.bam'.format(**locals())
+            printp("samtools index " + bam)
+
+    printp('\n# drmr:wait')
+
+    printp('\n# drmr:label stats-pruned')
+    for index, sample in enumerate(sorted(SAMPLES.keys()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        for strand in ['fwd', 'rev']:
+            input_bam = '{sample}.read1.{strand}.pruned.bam'.format(**locals())
+            printp('samtools flagstat {input_bam} > {input_bam}.flagstat'.format(**locals()))
+
+    printp('\n# drmr:label clip')
+    printp('\n# drmr:job time_limit=1h processors=1 memory=4g working_directory={}'.format(TRACK_DIR))
+    bamtobed_template = """bam clipOverlap --in {input_bam} --out -.bam | bamToBed -i /dev/stdin | sort -k 1,1 -k2,2n | {bed_start_site_conversion} > {output_bed} """
+
+    start_site_converters = {
+        'fwd': """awk 'BEGIN {{FS="\\t"; OFS="\\t";}} {{print $1, $2, ($2 + 1), $4, $5, $6;}}'""",
+        'rev': """awk 'BEGIN {{FS="\\t"; OFS="\\t";}} {{print $1, ($3 - 1), $3, $4, $5, $6;}}'"""
+    }
+
+    #
+    # convert the pruned BAMs to BEDs containing just read1 start sites
+    #
+    for index, sample in enumerate(sorted(SAMPLES.keys()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        for strand in ['fwd', 'rev']:
+            bed_start_site_conversion = start_site_converters[strand]
+            input_bam = '{sample}.read1.{strand}.pruned.bam'.format(**locals())
+            output_bed = '{sample}.read1.{strand}.pruned.bed'.format(**locals())
+            template = bamtobed_template.format(**locals())
+            printp(template.format(**locals()))
+
+    printp('\n# drmr:wait')
+
+    printp('\n#\n# Make the read1 start site tracks\n#')
+    printp('\n# drmr:label r1ss-track')
+
+    bedgraph_template = """export MAPPED_READ_COUNT=$(wc -l {input_bed} | awk '{{print $1}}'); export SCALE_FACTOR=$(perl -E "printf \"%f\\n\", ${{MAPPED_READ_COUNT}} / 1000000.0;");  {input_bed} | bedtools genomecov -scale ${{SCALE_FACTOR}} -bga -i {input_bed} -g {chrom_sizes} | LC_COLLATE=C sort -k1,1 -k2,2n > {output_bg}"""
+
+    for index, (sample, libraries) in enumerate(sorted(SAMPLES.items()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        star_reference = STAR_REFERENCES[libraries[0]['reference_genome']]
+        chrom_sizes = os.path.join(star_reference, 'chrNameLength.txt')
+
+        for strand in ['fwd', 'rev']:
+            input_bed = '{sample}.read1.{strand}.pruned.bed'.format(**locals())
+            output_bg = '{sample}.read1.{strand}.pruned.coverage.bg'.format(**locals())
+            printp(bedgraph_template.format(**locals()))
+
+    printp('\n# drmr:wait')
+
+    negate_template = """awk 'BEGIN {{FS="\\t"; OFS="\\t";}} {{print $1, $2, $3, -1 * $4;}}' {input_bg} > {input_bg}.negated && mv {input_bg}.negated {input_bg}"""
+    printp('\n# drmr:label negate-rev')
+    for index, (sample, libraries) in enumerate(sorted(SAMPLES.items()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        input_bg = '{sample}.read1.rev.pruned.coverage.bg'.format(**locals())
+        printp(negate_template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+    track_template = """bedGraphToBigWig {input_bg} {chrom_sizes} {output_bw}"""
+
+    for index, (sample, libraries) in enumerate(sorted(SAMPLES.items()), 1):
+        if LIMIT_IO and index % LIMIT_IO == 0:
+            printp("""\n# drmr:wait""")
+
+        star_reference = STAR_REFERENCES[libraries[0]['reference_genome']]
+        chrom_sizes = os.path.join(star_reference, 'chrNameLength.txt')
+
+        for strand in ['fwd', 'rev']:
+            input_bg = '{sample}.read1.{strand}.pruned.coverage.bg'.format(**locals())
+            output_bw = input_bg.replace('.bg', '.bw')
+            printp(track_template.format(**locals()))
+
+
 if __name__ == '__main__':
     mkdir(WORK_PATH)
     mkdir(DATA_PATH)
@@ -352,13 +529,18 @@ if __name__ == '__main__':
     printp('#!/bin/bash')
     printp('# -*- mode: sh; coding: utf-8 -*-\n')
 
+    # We've seen marginal improvements when we trim adapters, so we do it by default,
+    # but STAR's soft clipping is really almost as effective.
+    trim_adapters()
+
     star()
 
     # Uncomment to create a single BAM for each library by merging all of its readgroup BAMs
     # merge_star_libraries()
 
-    # Uncomment to create a single BAM for each sample by merging all of its libraries' readgroup BAMs
-    # merge_star_samples()
+    merge_star_samples()
+
+    make_r1ss_tracks()  # run on samples, so requires merge_star_samples before this
 
     qorts()
     qorts_wig2bigwig()
