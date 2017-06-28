@@ -53,6 +53,7 @@ EXCLUDED_REGIONS = {
 TSS_REFERENCES = {
     'hg19': prefix_reference_root('human/hg19/annot/hg19.tss.refseq.bed'),
     'mm9': prefix_reference_root('mouse/mm9/annot/mm9.tss.refseq.bed'),
+    'mm10': prefix_reference_root('mouse/mm10/annot/mm10.tss.refseq.bed'),
     'rn5': prefix_reference_root('rat/rn5/annot/rn5.tss.refseq.bed'),
 }
 
@@ -336,7 +337,7 @@ def bwa(threads=4, algorithm='MEM', time_limit='8h'):
     for library_name, library in sorted(LIBRARIES.items()):
         reference_genome = library['reference_genome']
         bwa_reference = BWA_REFERENCES[reference_genome]
-        if not os.path.exists(bwa_reference):
+        if not (os.path.exists(bwa_reference) or os.path.exists(bwa_reference + '.bwt')):
             print('BWA reference "{}" does not exist.'.format(bwa_reference), file=sys.stderr)
             sys.exit(1)
 
@@ -702,6 +703,7 @@ def ataqv(use_autosomal_reference_files=False, threads=4):
 
     ATAQV_TEMPLATE = """ataqv --peak-file {peak_file} --metrics-file {metrics_file} --name 'Library {library_name}, read group {rg}' {ataqv_options} {organism} {alignments} > {output_file}\n"""
 
+    metrics_files = []
     for library_name, library in sorted(LIBRARIES.items()):
         if use_autosomal_reference_files:
             autosomal_reference_filename = os.path.join(ATAQV_DIR, '{}.arf'.format(library_name))
@@ -747,10 +749,18 @@ def ataqv(use_autosomal_reference_files=False, threads=4):
             organism = ORGANISMS.get(library['reference_genome'])
 
             metrics_file = make_read_group_file(library_name, rg, '.ataqv.json.gz')
+            metrics_files.append(metrics_file)
+
             output_file = make_read_group_file(library_name, rg, '.ataqv.out')
 
             printp("""\n# drmr:job nodes=1 processors={} memory=8g working_directory={} time_limit=4h""".format(threads, ATAQV_DIR))
             printp(ATAQV_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:label mkarv""")
+    printp("""\n# drmr:job nodes=1 processors=1 working_directory={} time_limit=4h""".format(ATAQV_DIR))
+    printp("""\nmkarv --force -d '{}' viewer {}""".format(DESCRIPTION, ' '.join(metrics_files)))
 
 
 if __name__ == '__main__':
