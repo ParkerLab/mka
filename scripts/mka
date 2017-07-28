@@ -24,7 +24,7 @@ import jinja2
 
 
 PROGRAM = 'mka'
-PROGRAM_VERSION = '0.8.3'
+PROGRAM_VERSION = '0.8.5'
 
 LIBRARY_FILENAME_PATTERN = re.compile(
     '^(?P<sample>.*?)'

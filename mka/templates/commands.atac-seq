@@ -97,7 +97,7 @@ GB_DIR = os.path.join(WORK_PATH, 'gb')
 # I/O-intensive jobs that run at once, to keep the machine
 # responsive. If you're running on dedicated cluster nodes, you
 # probably want to set this to 0.
-LIMIT_IO = 8
+LIMIT_IO = 0
 
 #
 # Library dictionary
@@ -270,7 +270,7 @@ def make_read_group_header(library, id):
         'PL': library['sequencing_platform'],
 
         # free-form description
-        'DS': library['description'],
+        'DS': library['description'].replace('\n', ' '),
     }
 
     header = """@RG\\t{}""".format('\\t'.join('{}:{}'.format(k, v) for k, v in sorted(read_group_components.items()) if v))
@@ -610,7 +610,7 @@ def normalize_macs2_treatment_pileups():
     printp("""\n# drmr:label normalize-macs2-treatment-pileup""")
     printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(GB_DIR))
 
-    template = """{% raw %}test -r {macs2_output_file} && (zcat {macs2_treat_pileup_file} | awk -v NTAGS=$(grep 'total tags in treatment' {macs2_output_file} | awk '{{print $NF}}') '{{$4=$4*(10000000/NTAGS); print}}' | perl -pe 's/\\s+/\\t/g; s/$/\\n/' | grep -v '_' | LC_COLLATE=C sort -k1,1 -k2,2n > {macs2_normalized_treat_pileup_file}) || exit 1{% endraw %}"""
+    template = """{% raw %}test -r {macs2_output_file} && (zcat {macs2_treat_pileup_file} | awk -v NTAGS=$(grep 'total tags in treatment' {macs2_output_file} | awk '{{print $NF}}') '{{$4=$4*(10000000/NTAGS); print}}' | perl -pe 's/\\s+/\\t/g; s/$/\\n/' | (grep -v '_' || true) | LC_COLLATE=C sort -k1,1 -k2,2n > {macs2_normalized_treat_pileup_file}) || exit 1{% endraw %}"""
 
     NTAGS_RE = re.compile('total tags in treatment: (\d+)')
     for library_name, library in sorted(LIBRARIES.items()):
@@ -633,7 +633,7 @@ def make_macs2_treatment_pileup_bigwigs():
     printp("""\n# drmr:label macs2-treatment-pileup-bigwig""")
     printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(GB_DIR))
 
-    template = """bedGraphToBigWig {macs2_normalized_treat_pileup_bdg} {chromosome_sizes} {macs2_normalized_treat_pileup_bw}"""
+    template = """bash -c 'test -s {macs2_normalized_treat_pileup_bdg} && bedGraphToBigWig {macs2_normalized_treat_pileup_bdg} {chromosome_sizes} {macs2_normalized_treat_pileup_bw} || true'"""
 
     for library_name, library in sorted(LIBRARIES.items()):
         chromosome_sizes = get_chromosome_sizes_path(library)
@@ -722,7 +722,7 @@ def ataqv(use_autosomal_reference_files=False, threads=4):
 
             ataqv_options = ["""{} '{}'""".format(k, v) for k, v in sorted({
                 '--description': DESCRIPTION,
-                '--library-description': library.get('description'),
+                '--library-description': library.get('description').replace('\n', ' '),
                 '--url': library.get('url'),
             }.items()) if v]
 

@@ -180,7 +180,7 @@ def make_read_group_header(library, id):
         library['sequencing_center'],
         library['sequencing_date'],
         library['sequencing_platform'],
-        library['description']
+        library['description'].replace('\n', ' ')
     )
 
 
