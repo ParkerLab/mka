@@ -1,14 +1,19 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 #
 # This analysis was generated with this mka command:
 #
-# {{MKA_COMMAND_LINE}}
+"""
+{{MKA_COMMAND_LINE}}
+"""
+
 #
 # run in this directory:
 #
-# {{MKA_CWD}}
-#
+"""
+    {{MKA_CWD}}
+"""
 
 from __future__ import print_function
 

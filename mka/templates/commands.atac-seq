@@ -1,16 +1,21 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
 
 #
 # This analysis was generated with this mka command:
 #
-# {{MKA_COMMAND_LINE}}
+"""
+{{MKA_COMMAND_LINE}}
+"""
+
 #
 # run in this directory:
 #
-# {{MKA_CWD}}
-#
-
-from __future__ import print_function
+"""
+    {{MKA_CWD}}
+"""
 
 import contextlib
 import gzip
@@ -151,18 +156,18 @@ def open_maybe_gzipped(filename):
     return f
 
 
-LEADING_WHITESPACE_RE = re.compile(r'(\s+)*(.*)')
+LEADING_WHITESPACE_RE = re.compile(r'^( +)*(\S.*)')
 def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
     """The primary function of all this: writing to a drmr script."""
     if text:
         m = LEADING_WHITESPACE_RE.match(text)
-        if m.group(1):
+        if m and m.group(1):
             pipeline_file.write(m.group(1))
         if timed:
             pipeline_file.write('/usr/bin/time -v ')
         if ioniced:
             pipeline_file.write('ionice -c 2 -n 7 ')
-        pipeline_file.write(m.group(2))
+        pipeline_file.write(m and m.group(2) or text)
         pipeline_file.write('\n')
 
 
@@ -547,7 +552,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
                 printp("""\n# drmr:wait""")
 
             pruned_readgroup_bams = []
-            for library in sorted(libraries):
+            for library in sorted(libraries, key=lambda d: d['library']):
                 pruned_readgroup_bams.extend(make_read_group_file(library['library'], rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))
 
             printp("""\nsamtools merge -f {}.sample.pruned.bam {}""".format(sample, ' '.join(pruned_readgroup_bams)), ioniced=True)
@@ -571,7 +576,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
     for sample, libraries in sorted(SAMPLES.items()):
         if call_samples:
             compression_targets.add(sample)
-        for library in sorted(libraries):
+        for library in sorted(libraries, key=lambda d: d['library']):
             if call_libraries:
                 compression_targets.add(library['library'])
             for rg in sorted(library['readgroups'].keys()):
@@ -588,7 +593,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
             if call_samples:
                 blacklist_targets.add((sample, libraries[0]['reference_genome']))
 
-            for library in sorted(libraries):
+            for library in sorted(libraries, key=lambda d: d['library']):
                 if call_libraries:
                     blacklist_targets.add((library['library'], library['reference_genome']))
 
@@ -760,7 +765,7 @@ def ataqv(use_autosomal_reference_files=False, threads=4):
 
     printp("""\n# drmr:label mkarv""")
     printp("""\n# drmr:job nodes=1 processors=1 working_directory={} time_limit=4h""".format(ATAQV_DIR))
-    printp("""\nmkarv --force -d '{}' viewer {}""".format(DESCRIPTION, ' '.join(metrics_files)))
+    printp("""\nmkarv --force -d '{}' viewer {}""".format(DESCRIPTION, ' \\\n    '.join(metrics_files)))
 
 
 if __name__ == '__main__':

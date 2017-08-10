@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 #
 # mka: make analysis
@@ -14,6 +15,7 @@ import json
 import logging
 import os.path
 import pkgutil
+import pprint
 import re
 import subprocess
 import sys
@@ -165,8 +167,8 @@ def write_template(template_context, template, destination_directory, analysis_t
         t = template_environment.from_string(template_content)
         output = t.render(**template_context)
         destination_filename = os.path.join(destination_directory, template)
-        with open(destination_filename, 'w') as destination:
-            destination.write(output)
+        with open(destination_filename, 'wb') as destination:
+            destination.write(output.encode('utf-8'))
     except jinja2.exceptions.TemplateSyntaxError as e:
         logging.fatal('Error at line {} in template {}: {}'.format(e.lineno, template, e))
 
@@ -376,7 +378,7 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         library = metadata['library']
         if library in libraries:
             if libraries[library]['sample'] != metadata['sample']:
-                raise ValueError('Library {} seems to belong to multiple samples in {}. Check your input.'.format(library, json.dumps(libraries, sort_keys=True, indent=4)))
+                raise ValueError('Library {} seems to belong to multiple samples in {}. Check your input.'.format(library, pprint.pformat(libraries, indent=4)))
         else:
             libraries[library] = {k: v for k, v in metadata.items() if k not in ['pair_index', 'readgroup']}
             libraries[library]['readgroups'] = {}  # read group ID -> list of files
@@ -387,8 +389,8 @@ def describe_libraries(library_files, analysis_type=None, interactive=False, def
         else:
             readgroups[metadata['readgroup']] = [library_file]
 
-    logging.debug('\nLibraries: {}'.format(json.dumps(libraries, sort_keys=True, indent=4)))
-    return json.dumps(libraries, sort_keys=True, indent=4)
+    result = json.dumps(libraries, sort_keys=True, indent=4, ensure_ascii=False)
+    return result
 
 
 def initialize_git_repo(directory):
@@ -475,38 +477,32 @@ def shquote(arg):
 def reconstruct_command_line(args):
     command_line = [sys.argv[0]]
     if args.analysis_path:
-        command_line.append('--analysis-path')
-        command_line.append(os.path.normpath(os.path.abspath(args.analysis_path)))
+        command_line.append('--analysis-path ' + os.path.normpath(os.path.abspath(args.analysis_path)))
 
     if args.analysis_type:
-        command_line.append('--analysis-type')
-        command_line.append(shquote(args.analysis_type))
+        command_line.append('--analysis-type ' + shquote(args.analysis_type))
 
     if args.description:
-        command_line.append('--description')
-        command_line.append(shquote(args.description))
+        command_line.append('--description ' + shquote(args.description))
 
     if args.interactive:
         command_line.append('--interactive')
 
     if args.library_defaults:
-        command_line.append('--library-defaults')
-        command_line.append(os.path.normpath(os.path.abspath(args.library_defaults)))
+        command_line.append('--library-defaults ' + os.path.normpath(os.path.abspath(args.library_defaults)))
 
     if args.name:
-        command_line.append('--name')
-        command_line.append(shquote(args.name))
+        command_line.append('--name ' + shquote(args.name))
 
     if args.run_info:
-        command_line.append('--run-info')
-        command_line.append(os.path.normpath(os.path.abspath(args.run_info)))
+        command_line.append('--run-info ' + os.path.normpath(os.path.abspath(args.run_info)))
 
     command_line.append(os.path.normpath(os.path.abspath(args.control_path)))
 
     for library in args.libraries:
         command_line.append(os.path.normpath(os.path.abspath(library)))
 
-    return ' '.join(command_line)
+    return ' \\\n    '.join(command_line)
 
 
 if __name__ == '__main__':
