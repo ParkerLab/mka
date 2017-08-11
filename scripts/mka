@@ -23,6 +23,7 @@ import textwrap
 
 import dateutil.parser
 import jinja2
+import mka
 
 
 PROGRAM = 'mka'
@@ -35,11 +36,6 @@ LIBRARY_FILENAME_PATTERN = re.compile(
     '(?:___(?P<description>.*?))?'  # optional
     '\.(?P<pair_index>\d)*\.f(ast)*q.*'
 )
-
-SUPPORTED_ANALYSES = [
-    'atac-seq',
-    'rna-seq',
-]
 
 ANALYSIS_SPECIFIC_LIBRARY_OPTIONS = {
     'atac-seq': {},
@@ -119,6 +115,24 @@ def read_custom_template(path):
     return content
 
 
+def get_custom_template_directory():
+    custom_template_directory = os.environ.get('{}_TEMPLATES'.format(PROGRAM.upper()))
+    if custom_template_directory and not os.path.isdir(custom_template_directory):
+        custom_template_directory = None
+    return custom_template_directory
+
+
+def get_supported_analyses():
+    template_dirs = [d for d in [get_custom_template_directory(), os.path.join(mka.__path__[0], 'templates')] if d and os.path.isdir(d)]
+    analyses = []
+    for template_dir in template_dirs:
+        for filename in os.listdir(template_dir):
+            if filename.startswith('commands.'):
+                analyses.append(filename.replace('commands.', ''))
+
+    return sorted(analyses)
+
+
 def find_template(template, analysis_type=None):
     """
     Search mka template directories for the given template.
@@ -135,10 +149,7 @@ def find_template(template, analysis_type=None):
     else:
         sources = [template]
 
-    custom_template_directory = os.environ.get('{}_TEMPLATES'.format(PROGRAM.upper()))
-    if custom_template_directory and not os.path.isdir(custom_template_directory):
-        custom_template_directory = None
-
+    custom_template_directory = get_custom_template_directory()
     templates = []
     for source in sources:
         if custom_template_directory:
@@ -458,7 +469,7 @@ def parse_arguments():
     parser.add_argument('-d', '--description', help='A description of the analysis.')
     parser.add_argument('-i', '--interactive', action='store_true', help='Prompt for library metadata, instead of just inferring from filenames.')
     parser.add_argument('-l', '--library-defaults', help='A JSON file containing default metadata to use for all libraries. This will override metadata parsed from the file supplied with the --run-info option.')
-    parser.add_argument('-t', '--analysis-type', choices=SUPPORTED_ANALYSES, help='The type of pipeline to create.')
+    parser.add_argument('-t', '--analysis-type', choices=get_supported_analyses(), help='The type of pipeline to create.')
     parser.add_argument('-n', '--name', required=False, help="""The name for the analysis (default: derived from the control directory).""")
     parser.add_argument('-r', '--run-info', help='The path to a "run info" CSV file included with results from the UM DNA Sequencing Core. Library metadata will be supplemented with the run info. This metadata will be overridden with any supplied with --library-defaults or parsed from library FASTQ files.')
     parser.add_argument('control_path', help='The directory for the control files.')
