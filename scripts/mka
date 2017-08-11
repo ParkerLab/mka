@@ -182,6 +182,15 @@ def write_template(template_context, template, destination_directory, analysis_t
             destination.write(output.encode('utf-8'))
     except jinja2.exceptions.TemplateSyntaxError as e:
         logging.fatal('Error at line {} in template {}: {}'.format(e.lineno, template, e))
+        offending_line = None
+        i = 0
+        for line in template_content.splitlines():
+            i += 1
+            if i == e.lineno:
+                offending_line = line
+
+        logging.fatal('Offending line:\n{}\n'.format(offending_line))
+        raise
 
 
 def write_templates(template_context, destination_directory, analysis_type=None):

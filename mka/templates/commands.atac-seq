@@ -98,11 +98,17 @@ PRUNE_DIR = os.path.join(WORK_PATH, 'prune')
 TRIM_ADAPTER_DIR = os.path.join(WORK_PATH, 'trim_adapters')
 GB_DIR = os.path.join(WORK_PATH, 'gb')
 
-# By default, we use ionice and limit the number of particularly
-# I/O-intensive jobs that run at once, to keep the machine
-# responsive. If you're running on dedicated cluster nodes, you
-# probably want to set this to 0.
+# If you're running on a single machine, especially one shared with
+# others, you can limit the number of I/O-intensive jobs that run at
+# once, to keep the machine responsive. If you're running on dedicated
+# cluster nodes, you probably want to keep this at 0.
 LIMIT_IO = 0
+
+# Another way to keep jobs from swamping a single or shared machine is
+# to run them under ionice. Again, in a cluster environment, you
+# probably want to keep this set to False -- you don't want to pay
+# extra to give other jobs more I/O and make yours take longer.
+USE_IONICE = False
 
 #
 # Library dictionary
@@ -115,7 +121,7 @@ for library in LIBRARIES.values():
     SAMPLES.setdefault(library['sample'], []).append(library)
 
 
-def maybe_gzip(filename, ioniced=False):
+def maybe_gzip(filename, ioniced=USE_IONICE):
     """Compress a file with gzip."""
     template_data = {
         'f': filename,
@@ -294,9 +300,8 @@ def fastqc():
 
     for index, f in enumerate(iterate_all_files(), 1):
         symlink(f, FASTQC_DIR)
-        printp("""fastqc {}""".format(os.path.basename(f)), timed=True, ioniced=True)
+        printp("""fastqc {}""".format(os.path.basename(f)), timed=True, ioniced=USE_IONICE)
         if LIMIT_IO and index % LIMIT_IO == 0:
-            # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
             printp("""\n# drmr:wait""")
 
 
@@ -317,11 +322,10 @@ def trim_adapters():
             for f in sorted(files):
                 symlink(os.path.join(DATA_PATH, os.path.basename(f)), TRIM_ADAPTER_DIR)
             bases = ' '.join(os.path.basename(f) for f in sorted(files))
-            printp("""cta {}""".format(bases), timed=True, ioniced=True)
+            printp("""cta {}""".format(bases), timed=True, ioniced=USE_IONICE)
             index += 1
 
             if LIMIT_IO and index % LIMIT_IO == 0:
-                # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
                 printp("""\n# drmr:wait""")
 
 
@@ -372,13 +376,13 @@ def bwa(threads=4, algorithm='MEM', time_limit='8h'):
                 bwa_input_files = ' '.join(fastq_files)
                 read_group_header = make_read_group_header(library, rg)
                 bam = make_read_group_file(library_name, rg, '.bam')
-                printp("""bwa mem -M -R '{read_group_header}' -t {threads} {bwa_reference} {bwa_input_files} | samtools sort -m 1g -@ {threads} -O bam -T {library_name}___{rg}.sort -o {bam} -""".format(**locals()), timed=True, ioniced=True)
+                printp("""bwa mem -M -R '{read_group_header}' -t {threads} {bwa_reference} {bwa_input_files} | samtools sort -m 1g -@ {threads} -O bam -T {library_name}___{rg}.sort -o {bam} -""".format(**locals()), timed=True, ioniced=USE_IONICE)
 
             elif algorithm == 'backtrack':
                 backtrack_readgroups.append((library, rg, fastq_files))
                 for input_file in fastq_files:
                     output_file = input_file.replace('.trimmed.fq.gz', '.sai')
-                    printp("""bwa aln -t {threads} -f {output_file} {bwa_reference} {input_file}""".format(**locals()), timed=True, ioniced=True)
+                    printp("""bwa aln -t {threads} -f {output_file} {bwa_reference} {input_file}""".format(**locals()), timed=True, ioniced=USE_IONICE)
 
     printp("""\n# drmr:wait""")
 
@@ -399,7 +403,7 @@ def bwa(threads=4, algorithm='MEM', time_limit='8h'):
         sai = ' '.join([f.replace('.trimmed.fq.gz', '.sai') for f in fastq_files])
         read_group_header = make_read_group_header(library, rg)
         bam = make_read_group_file(library['library'], rg, '.bam')
-        printp("""bwa {bwa_command} -r '{read_group_header}' {bwa_reference} {sai} {fastq} | samtools sort -m 1g -@ {threads} -O bam -T {library_name}___{rg}.sort -o {bam}""".format(**locals()), timed=True, ioniced=True)
+        printp("""bwa {bwa_command} -r '{read_group_header}' {bwa_reference} {sai} {fastq} | samtools sort -m 1g -@ {threads} -O bam -T {library_name}___{rg}.sort -o {bam}""".format(**locals()), timed=True, ioniced=USE_IONICE)
 
         printp("""\n# drmr:wait""")
 
@@ -425,7 +429,7 @@ def mark_duplicates():
             input_bam = make_read_group_file(library_name, rg, '.bam')
             output_bam = make_read_group_file(library_name, rg, '.md.bam')
             symlink(os.path.join(BWA_DIR, input_bam), MD_DIR)
-            printp("""picard -m 4g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_name}___{rg}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.""".format(**locals()), timed=True, ioniced=True)
+            printp("""picard -m 4g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_name}___{rg}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.""".format(**locals()), timed=True, ioniced=USE_IONICE)
 
     printp("""\n# drmr:wait""")
     printp("""\n#\n# index the BAM files with marked duplicates, for pruning\n#\n""")
@@ -434,7 +438,7 @@ def mark_duplicates():
     for library_name, library in sorted(LIBRARIES.items()):
         for rg in sorted(library['readgroups'].keys()):
             bam = make_read_group_file(library_name, rg, '.md.bam')
-            printp("""samtools index {bam}""".format(**locals()), timed=True, ioniced=True)
+            printp("""samtools index {bam}""".format(**locals()), timed=True, ioniced=USE_IONICE)
 
 
 def prune(mapq=30):
@@ -472,10 +476,10 @@ def prune(mapq=30):
         for rg in sorted(library['readgroups'].keys()):
             input_bam = make_read_group_file(library_name, rg, '.md.bam')
             output_bam = make_read_group_file(library_name, rg, '.pruned.bam')
-            printp(PRUNE_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+            printp(PRUNE_TEMPLATE.format(**locals()), timed=True)
 
 
-def compress_macs2_output(prefix, ioniced=True):
+def compress_macs2_output(prefix, ioniced=USE_IONICE):
     maybe_gzip("{}.broad_peaks.broadPeak".format(prefix), ioniced)
     maybe_gzip("{}.broad_peaks.gappedPeak".format(prefix), ioniced)
     maybe_gzip("{}.broad_control_lambda.bdg".format(prefix), ioniced)
@@ -517,7 +521,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
             input_bam = make_read_group_file(library_name, rg, '.pruned.bam')
             prefix = make_read_group_file(library_name, rg)
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
-            printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+            printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=USE_IONICE)
 
     # If asked to call peaks on libraries, make a pruned BAM for each
     # then run MACS2 on those.
@@ -526,10 +530,9 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
         printp("""\n# drmr:label make-pruned-libraries\n""")
         for index, (library_name, library) in enumerate(sorted(LIBRARIES.items()), 1):
             if LIMIT_IO and index % LIMIT_IO == 0:
-                # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
                 printp("""\n# drmr:wait""")
 
-            printp("""\nsamtools merge -f {}.library.pruned.bam {}""".format(library_name, ' '.join(make_read_group_file(library_name, rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))), ioniced=True)
+            printp("""\nsamtools merge -f {}.library.pruned.bam {}""".format(library_name, ' '.join(make_read_group_file(library_name, rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))))
 
         printp("""\n# drmr:wait""")
 
@@ -539,7 +542,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
             input_bam = '{}.library.pruned.bam'.format(library_name)
             prefix = library_name
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
-            printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+            printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=USE_IONICE)
 
     # If asked to call peaks on samples, make a pruned BAM for each,
     # and run MACS2 on those.
@@ -548,14 +551,13 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
         printp("""\n# drmr:label make-pruned-samples\n""")
         for index, (sample, libraries) in enumerate(sorted(SAMPLES.items()), 1):
             if LIMIT_IO and index % LIMIT_IO == 0:
-                # limit the number of concurrent jobs to avoid thrashing the disk (set LIMIT_IO=False on clusters!)
                 printp("""\n# drmr:wait""")
 
             pruned_readgroup_bams = []
             for library in sorted(libraries, key=lambda d: d['library']):
                 pruned_readgroup_bams.extend(make_read_group_file(library['library'], rg, '.pruned.bam') for rg in sorted(library['readgroups'].keys()))
 
-            printp("""\nsamtools merge -f {}.sample.pruned.bam {}""".format(sample, ' '.join(pruned_readgroup_bams)), ioniced=True)
+            printp("""\nsamtools merge -f {}.sample.pruned.bam {}""".format(sample, ' '.join(pruned_readgroup_bams)))
 
         printp("""\n# drmr:wait""")
 
@@ -565,7 +567,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
             input_bam = '{}.sample.pruned.bam'.format(sample)
             prefix = sample
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
-            printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+            printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=USE_IONICE)
 
     printp("""\n# drmr:wait""")
 
@@ -650,7 +652,7 @@ def make_macs2_treatment_pileup_bigwigs():
             prefix = make_read_group_file(library_name, rg)
             macs2_normalized_treat_pileup_bdg = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
             macs2_normalized_treat_pileup_bw = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bw'.format(prefix))
-            printp(template.format(**locals()), ioniced=True)
+            printp(template.format(**locals()))
 
     printp("""\n# drmr:wait""")
 
@@ -759,7 +761,7 @@ def ataqv(use_autosomal_reference_files=False, threads=4):
             output_file = make_read_group_file(library_name, rg, '.ataqv.out')
 
             printp("""\n# drmr:job nodes=1 processors={} memory=8g working_directory={} time_limit=4h""".format(threads, ATAQV_DIR))
-            printp(ATAQV_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+            printp(ATAQV_TEMPLATE.format(**locals()), timed=True, ioniced=USE_IONICE)
 
     printp("""\n# drmr:wait""")
 
