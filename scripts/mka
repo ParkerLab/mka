@@ -37,6 +37,8 @@ LIBRARY_FILENAME_PATTERN = re.compile(
     '\.(?P<pair_index>\d)*\.f(ast)*q.*'
 )
 
+ANALYSIS_SPECIFIC_TEMPLATE_PATTERN = re.compile('^(\w+)\.+(.+)')
+
 ANALYSIS_SPECIFIC_LIBRARY_OPTIONS = {
     'atac-seq': {},
     'rna-seq': {
@@ -47,12 +49,6 @@ ANALYSIS_SPECIFIC_LIBRARY_OPTIONS = {
         }
     }
 }
-
-TEMPLATES = [
-    '.gitignore',
-    'Makefile',
-    'commands',
-]
 
 URL_PREFIXES = {
     'SRR': 'http://www.ncbi.nlm.nih.gov/sra/?term=',
@@ -120,6 +116,16 @@ def get_custom_template_directory():
     if custom_template_directory and not os.path.isdir(custom_template_directory):
         custom_template_directory = None
     return custom_template_directory
+
+
+def get_templates():
+    template_dirs = [d for d in [get_custom_template_directory(), os.path.join(mka.__path__[0], 'templates')] if d and os.path.isdir(d)]
+    templates = set([])
+    for template_dir in template_dirs:
+        for filename in os.listdir(template_dir):
+            if not ANALYSIS_SPECIFIC_TEMPLATE_PATTERN.match(filename):
+                templates.add(os.path.basename(filename))
+    return sorted(templates)
 
 
 def get_supported_analyses():
@@ -198,7 +204,7 @@ def write_templates(template_context, destination_directory, analysis_type=None)
     if custom_template_directory and not os.path.isdir(custom_template_directory):
         logging.warn('Ignoring invalid custom template directory "{}"'.format(custom_template_directory))
 
-    for template in TEMPLATES:
+    for template in get_templates():
         write_template(template_context, template, destination_directory, analysis_type)
 
 
