@@ -124,11 +124,11 @@ def get_custom_template_directory():
 
 def get_supported_analyses():
     template_dirs = [d for d in [get_custom_template_directory(), os.path.join(mka.__path__[0], 'templates')] if d and os.path.isdir(d)]
-    analyses = []
+    analyses = set([])
     for template_dir in template_dirs:
         for filename in os.listdir(template_dir):
             if filename.startswith('commands.'):
-                analyses.append(filename.replace('commands.', ''))
+                analyses.add(filename.replace('commands.', ''))
 
     return sorted(analyses)
 
@@ -431,8 +431,21 @@ def initialize_git_repo(directory):
         subprocess.check_output(['git', 'commit', '-m', 'initial commit'])
 
 
+class LoggingArgumentParser(argparse.ArgumentParser):
+    def exit(self, status=0, message=None):
+        if message:
+            if status == 0:
+                self._print_message(message, log=logging.info)
+            else:
+                self._print_message(message, log=logging.error)
+        sys.exit(status)
+
+    def _print_message(self, message, file=None, log=logging.info):
+        log(message)
+
+
 def parse_arguments():
-    parser = argparse.ArgumentParser(
+    parser = LoggingArgumentParser(
         prog=PROGRAM,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent("""
@@ -527,15 +540,15 @@ def reconstruct_command_line(args):
 
 if __name__ == '__main__':
 
-    args = parse_arguments()
-
     root = logging.getLogger()
-    root.setLevel(args.verbose and logging.DEBUG or logging.INFO)
-
     handler = ColoringStreamHandler()
     handler.setFormatter(logging.Formatter(fmt='%(message)s'))
-
     root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    args = parse_arguments()
+
+    root.setLevel(args.verbose and logging.DEBUG or logging.INFO)
 
     control_path = os.path.abspath(args.control_path)
     analysis_path = args.analysis_path and os.path.abspath(args.analysis_path) or control_path
