@@ -128,7 +128,7 @@ def maybe_gzip(filename, ioniced=USE_IONICE):
         'ionice': ioniced and 'ionice -c 2 -n 7 ' or ''
     }
 
-    command_template = """if [ -r "{f}" ]; then {ionice}gzip -f "{f}"; elif [ -r "{f}".gz ]; then echo '"{f}" already gzipped.'; fi"""
+    command_template = """if [ -r "{f}" ]; then {ionice}gzip -f "{f}"; elif [ -r "{f}.gz" ]; then echo '"{f}" already gzipped.'; fi"""
 
     printp(command_template.format(**template_data))
 
@@ -540,7 +540,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
         printp("""\n# drmr:label macs2-libraries\n""")
         for library_name, library in sorted(LIBRARIES.items()):
             input_bam = '{}.library.pruned.bam'.format(library_name)
-            prefix = library_name
+            prefix = '{}.library'.format(library_name)
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
             printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=USE_IONICE)
 
@@ -565,7 +565,7 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
         printp("""\n# drmr:label macs2-samples\n""")
         for sample in sorted(SAMPLES.keys()):
             input_bam = '{}.sample.pruned.bam'.format(sample)
-            prefix = sample
+            prefix = '{}.sample'.format(sample)
             symlink(os.path.join(PRUNE_DIR, input_bam), MACS2_DIR)
             printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=USE_IONICE)
 
@@ -577,10 +577,10 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
     compression_targets = set()
     for sample, libraries in sorted(SAMPLES.items()):
         if call_samples:
-            compression_targets.add(sample)
+            compression_targets.add('{}.sample'.format(sample))
         for library in sorted(libraries, key=lambda d: d['library']):
             if call_libraries:
-                compression_targets.add(library['library'])
+                compression_targets.add('{}.library'.format(library['library']))
             for rg in sorted(library['readgroups'].keys()):
                 compression_targets.add(make_read_group_file(library['library'], rg))
 
@@ -593,11 +593,11 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
         printp("""\n# drmr:label exclude-blacklisted-peaks\n""")
         for sample, libraries in sorted(SAMPLES.items()):
             if call_samples:
-                blacklist_targets.add((sample, libraries[0]['reference_genome']))
+                blacklist_targets.add(('{}.sample'.format(sample), libraries[0]['reference_genome']))
 
             for library in sorted(libraries, key=lambda d: d['library']):
                 if call_libraries:
-                    blacklist_targets.add((library['library'], library['reference_genome']))
+                    blacklist_targets.add(('{}.library'.format(library['library']), library['reference_genome']))
 
                 for rg in sorted(library['readgroups'].keys()):
                     prefix = make_read_group_file(library['library'], rg)
@@ -606,6 +606,12 @@ def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False, call_libra
 
     for target, genome in sorted(blacklist_targets):
         exclude_blacklisted_peaks(target, genome)
+
+
+def get_macs2_output_files(prefix):
+    macs2_output_file = os.path.join(MACS2_DIR, '{}.macs2.out'.format(prefix))
+    macs2_treat_pileup_file = os.path.join(MACS2_DIR, '{}.broad_treat_pileup.bdg.gz'.format(prefix))
+    return macs2_output_file, macs2_treat_pileup_file
 
 
 def normalize_macs2_treatment_pileups():
@@ -617,16 +623,33 @@ def normalize_macs2_treatment_pileups():
     printp("""\n# drmr:label normalize-macs2-treatment-pileup""")
     printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(GB_DIR))
 
-    template = """{% raw %}test -r {macs2_output_file} && (zcat {macs2_treat_pileup_file} | awk -v NTAGS=$(grep 'total tags in treatment' {macs2_output_file} | awk '{{print $NF}}') '{{$4=$4*(10000000/NTAGS); print}}' | perl -pe 's/\\s+/\\t/g; s/$/\\n/' | (grep -v '_' || true) | LC_COLLATE=C sort -k1,1 -k2,2n > {macs2_normalized_treat_pileup_file}) || exit 1{% endraw %}"""
+    template = """{% raw %}test -s {macs2_output_file} && (zcat {macs2_treat_pileup_file} | awk -v NTAGS=$(grep 'total tags in treatment' {macs2_output_file} | awk '{{print $NF}}') '{{$4=$4*(10000000/NTAGS); print}}' | perl -pe 's/\\s+/\\t/g; s/$/\\n/' | (grep -v '_' || true) | LC_COLLATE=C sort -k1,1 -k2,2n > {macs2_normalized_treat_pileup_file}) || exit 1{% endraw %}"""
 
     NTAGS_RE = re.compile('total tags in treatment: (\d+)')
     for library_name, library in sorted(LIBRARIES.items()):
         for rg in sorted(library['readgroups'].keys()):
             prefix = make_read_group_file(library_name, rg)
-            macs2_output_file = os.path.join(MACS2_DIR, '{}.macs2.out'.format(prefix))
-            macs2_treat_pileup_file = os.path.join(MACS2_DIR, '{}.broad_treat_pileup.bdg.gz'.format(prefix))
+            macs2_output_file, macs2_treat_pileup_file = get_macs2_output_files(prefix)
             macs2_normalized_treat_pileup_file = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
             printp(template.format(**locals()))
+
+    printp("""\n# normalize any existing library MACS2 output""")
+    # If peaks were called on libraries by passing call_libraries=True to the macs2 function, normalize the MACS2 output for
+    # each library
+    for library_name, library in sorted(LIBRARIES.items()):
+        prefix = '{}.library'.format(library_name)
+        macs2_output_file, macs2_treat_pileup_file = get_macs2_output_files(prefix)
+        macs2_normalized_treat_pileup_file = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
+        printp(template.format(**locals()))
+
+    printp("""\n# normalize any existing sample MACS2 output""")
+    # If peaks were called on samples by passing call_samples=True to the macs2 function, normalize the MACS2 output for each
+    # sample
+    for sample in sorted(SAMPLES.keys()):
+        prefix = '{}.sample'.format(sample)
+        macs2_output_file, macs2_treat_pileup_file = get_macs2_output_files(prefix)
+        macs2_normalized_treat_pileup_file = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
+        printp(template.format(**locals()))
 
     printp("""\n# drmr:wait""")
 
@@ -648,50 +671,74 @@ def make_macs2_treatment_pileup_bigwigs():
             print('Chromosome size file "{}" does not exist.'.format(chromosome_sizes))
             sys.exit(1)
 
+        prefix = '{}.library'.format(library_name)
+        macs2_normalized_treat_pileup_bdg = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
+        macs2_normalized_treat_pileup_bw = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bw'.format(prefix))
+        printp(template.format(**locals()))
+
         for rg in sorted(library['readgroups'].keys()):
             prefix = make_read_group_file(library_name, rg)
             macs2_normalized_treat_pileup_bdg = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
             macs2_normalized_treat_pileup_bw = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bw'.format(prefix))
             printp(template.format(**locals()))
 
+    for sample, libraries in sorted(SAMPLES.items()):
+        chromosome_sizes = get_chromosome_sizes_path(libraries[0])
+        if not os.path.isfile(chromosome_sizes):
+            print('Chromosome size file "{}" does not exist.'.format(chromosome_sizes))
+            sys.exit(1)
+
+        prefix = '{}.sample'.format(sample)
+        macs2_normalized_treat_pileup_bdg = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bdg'.format(prefix))
+        macs2_normalized_treat_pileup_bw = os.path.join(GB_DIR, '{}.broad_treat_pileup.normalized.bw'.format(prefix))
+        printp(template.format(**locals()))
+
     printp("""\n# drmr:wait""")
 
 
-def make_track_lines():
-    """Make UCSC Genome Browser track lines for the broad peak files and the normalized treatment pileup bigwig files"""
+def make_track_line(track_lines_file, prefix, reference_genome, base_url='https://theparkerlab.med.umich.edu/gb/tracks'):
+    treat_pileup_bw = '{}.broad_treat_pileup.normalized.bw'.format(prefix)
+    treat_pileup_bw_url = '{}/{}/{}'.format(base_url, ANALYSIS_NAME, treat_pileup_bw)
 
-    base_url = 'https://theparkerlab.med.umich.edu/gb/tracks'
+    treat_pileup_track_line = (
+        """track type=bigWig db={reference_genome} name='{prefix}' """
+        """visibility=full color=255,128,0 alwaysZero=on maxHeightPixels=50:50:50 """
+        """windowingFunction=mean smoothingWindow=3 bigDataUrl={treat_pileup_bw_url}\n"""
+    ).format(**locals())
+
+    track_lines_file.write(treat_pileup_track_line)
+
+    peak_track = '{}.broad_peaks.broadPeak.gz'.format(prefix)
+    peak_track_url = '{}/{}/{}'.format(base_url, ANALYSIS_NAME, peak_track)
+
+    peak_track_line = (
+        """track type=broadPeak db={reference_genome} name='{prefix}_peaks'\n"""
+        """{peak_track_url}\n"""
+    ).format(**locals())
+
+    track_lines_file.write(peak_track_line)
+
+    symlink(os.path.join(MACS2_DIR, peak_track), GB_DIR)
+
+
+def make_track_lines(base_url='https://theparkerlab.med.umich.edu/gb/tracks'):
+    """Make UCSC Genome Browser track lines for the broad peak files and the normalized treatment pileup bigwig files"""
 
     mkdir(GB_DIR)
 
     for reference_genome, libraries in libraries_by_genome():
         track_lines_file = os.path.join(GB_DIR, 'track_lines.' + reference_genome)
+        samples_written = set([])
         with open(track_lines_file, 'w') as track_lines:
             for library in libraries:
+                if library['sample'] not in samples_written:
+                    make_track_line(track_lines, '{}.sample'.format(library['sample']), library['reference_genome'], base_url)
+
+                make_track_line(track_lines, '{}.library'.format(library['library']), library['reference_genome'], base_url)
+
                 for rg in sorted(library['readgroups'].keys()):
                     prefix = make_read_group_file(library['library'], rg)
-                    treat_pileup_bw = '{}.broad_treat_pileup.normalized.bw'.format(prefix)
-                    treat_pileup_bw_url = '{}/{}/{}'.format(base_url, ANALYSIS_NAME, treat_pileup_bw)
-
-                    treat_pileup_track_line = (
-                        """track type=bigWig db={library[reference_genome]} name='{prefix}' """
-                        """visibility=full color=255,128,0 alwaysZero=on maxHeightPixels=50:50:50 """
-                        """windowingFunction=mean smoothingWindow=3 bigDataUrl={treat_pileup_bw_url}\n"""
-                    ).format(**locals())
-
-                    track_lines.write(treat_pileup_track_line)
-
-                    peak_track = '{}.broad_peaks.broadPeak.gz'.format(prefix)
-                    peak_track_url = '{}/{}/{}'.format(base_url, ANALYSIS_NAME, peak_track)
-
-                    peak_track_line = (
-                        """track type=broadPeak db={library[reference_genome]} name='{prefix}_peaks'\n"""
-                        """{peak_track_url}\n"""
-                    ).format(**locals())
-
-                    track_lines.write(peak_track_line)
-
-                    symlink(os.path.join(MACS2_DIR, peak_track), GB_DIR)
+                    make_track_line(track_lines, prefix, library['reference_genome'], base_url)
 
     with open(os.path.join(GB_DIR, 'install.sh'), 'w') as install:
         vs_dir = os.path.join('/lab/web/data/gb/tracks/', ANALYSIS_NAME)
