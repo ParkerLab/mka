@@ -1,0 +1,258 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+
+#
+# Create a script to fetch sample FASTQ files from a GEO series,
+# optionally filtering samples by a text pattern. Also produces a JSON
+# file containing library metadata that the mka tool can use to
+# generate a pipeline for processing the FASTQ files.
+#
+
+from __future__ import print_function
+
+import argparse
+import csv
+import hashlib
+import json
+import logging
+import os
+import re
+import sys
+import textwrap
+
+import mka
+import mka.path
+
+import requests
+from bs4 import BeautifulSoup
+
+
+try:
+    from urllib.parse import quote as quote_url
+except:
+    from urllib import quote as quote_url
+
+PROGRAM = 'fetchgeo'
+PROGRAM_VERSION = mka.__version__
+
+NCBI_BASE_URL = 'https://www.ncbi.nlm.nih.gov'
+GEO_BASE_URL = NCBI_BASE_URL + '/geo'
+SRA_BASE_URL = NCBI_BASE_URL + '/sra'
+ACCESSION_BASE_URL = GEO_BASE_URL + '/query/acc.cgi?acc='
+SAMPLE_EXPORT_BASE_URL = GEO_BASE_URL + '/browse/?view=samples&zsort=date&mode=csv&display=100000&series='
+
+SAMPLE_URL_RE = re.compile(GEO_BASE_URL + '/query/acc\.cgi\?acc=(GSM.*)')
+SRA_URL_RE = re.compile(SRA_BASE_URL + '\?term=SR.*')
+SRR_URL_RE = re.compile('//trace.ncbi.nlm.nih.gov/Traces/sra/\?run=(SRR.*)')
+
+REFERENCE_GENOMES = {
+    'Mus musculus': 'mm9',
+    'Homo sapiens': 'hg19',
+    'Rattus norvegicus': 'rn5',
+}
+
+
+class ColoringStreamHandler(logging.StreamHandler):
+    LEVEL_COLORS = {
+        logging.DEBUG: '\033[34m',
+        logging.ERROR: '\033[31m',
+        logging.FATAL: '\033[31m',
+        logging.WARN: '\033[33m',
+    }
+
+    def emit(self, record):
+        tty = os.isatty(self.stream.fileno())
+        if tty:
+            color = self.LEVEL_COLORS.get(record.levelno, None)
+            if color:
+                self.stream.write(color)
+
+        self.stream.write(self.format(record))
+        self.stream.write('\n')
+        if tty:
+            self.stream.write('\033[0m')
+        self.flush()
+
+
+def get_file_hash(path, hashfunc=hashlib.md5):
+    hash = hashfunc()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            hash.update(chunk)
+    return hash.hexdigest()
+
+
+def already_present(path, content_length=-1, md5=None):
+    if os.path.exists(path):
+        if os.stat(path).st_size == content_length:
+            if md5:
+                print('Hashing {}'.format(path))
+                if get_file_hash(path) == md5:
+                    return True
+            else:
+                return True
+
+    return False
+
+
+def extract_value_from_table_layout(page, regexp, textonly=False):
+    label_cell = page.find('td', text=regexp)
+    value_cell = label_cell.next_sibling.next_sibling
+    if textonly:
+        content = value_cell.text
+    else:
+        content = u'{}'.format(''.join([u'{}'.format(c) for c in value_cell.contents]))
+        content = content.replace('<br/>', '\n')
+    return content
+
+
+def fetch_sample_list(series):
+    export_url = SAMPLE_EXPORT_BASE_URL + series.replace('GSE', '')
+    r = requests.get(export_url)
+    if r.status_code != 200:
+        print('Could not read sample list for series {}: {}.'.format(series, r.status_code), file=sys.stderr)
+        sys.exit(1)
+
+    sample_lines = list(r.iter_lines(decode_unicode=True))
+    sample_list = list(csv.DictReader(sample_lines))
+    return sample_list
+
+
+def fetch_sample(series, sample_url):
+    title_re = re.compile('^Title$')
+    organism_re = re.compile('^Organism$')
+    characteristics_re = re.compile('^Characteristics$')
+    extraction_protocol_re = re.compile('^Extraction protocol$')
+
+    sample_id = SAMPLE_URL_RE.match(sample_url).group(1)
+
+    print('Querying sample {}'.format(sample_id))
+
+    r = requests.get(sample_url)
+    if r.status_code != 200:
+        print('Could not read sample page at {}: {}.'.format(sample_url, r.status_code), file=sys.stderr)
+        sys.exit(1)
+
+    sample_page = BeautifulSoup(r.content, 'html.parser')
+    title = extract_value_from_table_layout(sample_page, title_re)
+    organism = extract_value_from_table_layout(sample_page, organism_re, textonly=True)
+    description = '\n'.join([
+        title,
+        extract_value_from_table_layout(sample_page, characteristics_re),
+        extract_value_from_table_layout(sample_page, extraction_protocol_re)
+    ])
+
+    library_metadata = {}
+    sra_links = sample_page.find_all('a', href=SRA_URL_RE)
+    for link in sra_links:
+        print('Retrieving library page at {}'.format(link['href']))
+        r = requests.get(link['href'])
+        if r.status_code != 200:
+            print('Could not read library page at {}.'.format(link), file=sys.stderr)
+            sys.exit(1)
+        sra_page = BeautifulSoup(r.content, 'html.parser')
+
+        run_links = sra_page.find_all('a', href=SRR_URL_RE)
+        for run_link in run_links:
+            library_id = SRR_URL_RE.match(run_link['href']).group(1)
+
+            print('Querying library {}'.format(library_id))
+
+            library_metadata[library_id] = {
+                'library': library_id,
+                'sample': sample_id,
+                'series': series,
+                'reference_genome': REFERENCE_GENOMES[organism],
+                'description': description,
+                'title': title,
+            }
+
+    return library_metadata
+
+
+def fetch(series_list, sample_patterns=[], chunk_size=1048576, overwrite=False):
+    library_metadata = {}
+
+    sample_patterns = [re.escape(p) for p in sample_patterns]
+    sample_pattern_string = '(' + '|'.join(sample_patterns) + ')'
+    sample_pattern_re = re.compile(sample_pattern_string)
+
+    for series in series_list:
+        print('Getting list of samples for series {}'.format(series))
+
+        sample_urls = []
+        sample_list = fetch_sample_list(series)
+        for sample in sample_list:
+            link = ACCESSION_BASE_URL + sample['Accession']
+
+            accession_matches = sample_pattern_re.search(sample['Accession'])
+            title_matches = sample_pattern_re.search(sample['Title'])
+
+            if not sample_patterns or accession_matches or title_matches:
+                sample_urls.append(link)
+
+        for sample_url in sample_urls:
+            library_metadata.update(fetch_sample(series, sample_url))
+
+    with open('library_defaults.json', 'wb') as metadata_file:
+        metadata = json.dumps({u'defaults': {}, u'libraries': library_metadata}, indent=2, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        metadata_file.write(metadata)
+
+    get_fastq_template = """cd {fastq_path} && fastq-dump --split-files --gzip {library_id} && mv {read1_orig} {read1_dest} && mv {read2_orig} {read2_dest}\n"""
+    with open('fetch.drmr', 'w') as drmr:
+        for library_id, metadata in sorted(library_metadata.items()):
+            fastq_path = os.path.abspath(os.path.join('fastq', metadata['series']))
+            mka.path.mkdir(fastq_path)
+
+            read1_orig = '{}_1.fastq.gz'.format(library_id)
+            read1_dest = quote_url('{}___{}___1___{}.1.fastq.gz'.format(metadata['sample'], library_id, metadata['title']))
+
+            read2_orig = '{}_2.fastq.gz'.format(library_id)
+            read2_dest = quote_url('{}___{}___1___{}.2.fastq.gz'.format(metadata['sample'], library_id, metadata['title']))
+
+            drmr.write(get_fastq_template.format(**locals()))
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        prog=PROGRAM,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description=textwrap.dedent("""
+
+        Given one or more GEO series accession numbers, create a
+        script to download the FASTQ files for each series' samples,
+        optionally filtered by a text pattern. Library metadata for
+        mka will also be written to a file in the destination
+        directory.
+
+        \0""")
+    )
+
+    parser.add_argument('-p', '--pattern', dest='patterns', action='append', default=[], help='One or more patterns used to select samples.')
+    parser.add_argument('--version', action='version', version=PROGRAM_VERSION)
+
+    parser.add_argument('directory', help='Destination directory for the metadata and FASTQ files.')
+    parser.add_argument('series', nargs='+', help='One or more GEO series accession numbers.')
+
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+
+    handler = ColoringStreamHandler()
+    handler.setFormatter(logging.Formatter(fmt='%(message)s'))
+
+    root = logging.getLogger()
+    root.addHandler(handler)
+
+    args = parse_arguments()
+
+    mka.path.mkdir(args.directory)
+    if not os.path.isdir(args.directory):
+        logging.error('Destination {} is not a directory.'.format(args.directory))
+        sys.exit(1)
+
+    os.chdir(args.directory)
+
+    fetch(args.series, args.patterns)

@@ -6,14 +6,20 @@
 # automate the creation of analysis pipelines.
 #
 
-from __future__ import print_function
 import argparse
 import csv
+import logging
 import os
 import re
 import sys
 import textwrap
 
+import mka.log
+import mka.path
+
+
+PROGRAM = 'screname'
+PROGRAM_VERSION = mka.__version__
 
 SEQCORE_RE = re.compile('^\d+_(?P<barcode>[-ACGT]+)_S(?P<samplenumber>\d+)_L(?P<lane>\d+)_R(?P<pair_index>\d)_\d+\.fastq.gz$')
 MKA_TEMPLATE = '{sample}___{library}___L{lane}___{description}.{pair_index}.fq.gz'
@@ -75,59 +81,73 @@ def parse_arguments():
         """) + '\n\n'
     )
 
+    parser.add_argument('-f', '--force', action='store_true', help='Overwrite any existing files.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Display more details while renaming.')
     parser.add_argument('-o', '--overrides', help='A CSV containing metadata to use instead of that supplied by the sequencing core. Must contain four fields: SeqCoreID (which is SampleID in the run info CSV, without the "Sample_" prefix), Sample, Library, and Description.')
-    parser.add_argument('csv', help='The CSV run info file.')
+    parser.add_argument('csv', type=mka.path.FilePath(require_readable=True), help='The CSV run info file.')
     parser.add_argument('src', help='The directory containing the sample directories, which in turn contain the original FASTQ files.')
     parser.add_argument('dest', help='The directory in which links to the original FASTQ files will be created, using names that encode sequencing metadata for mka.')
 
     return parser.parse_args()
 
+if __name__ == '__main__':
 
-args = parse_arguments()
+    root = logging.getLogger()
+    handler = mka.log.ColoringStreamHandler()
+    handler.setFormatter(logging.Formatter(fmt='%(message)s'))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
-samples = read_runinfo(args.csv)
+    args = parse_arguments()
 
-if not samples:
-    print('Found no metadata in {}'.format(args.csv))
-    sys.exit(1)
+    root.setLevel(args.verbose and logging.DEBUG or logging.INFO)
 
-overrides = args.overrides and read_overrides(args.overrides) or {}
+    samples = read_runinfo(args.csv)
 
-src_root = os.path.abspath(args.src)
-dest = os.path.abspath(args.dest)
+    if not samples:
+        logging.fatal('Found no metadata in {}'.format(args.csv))
+        sys.exit(1)
 
-if not os.path.isdir(args.dest):
-    os.makedirs(args.dest)
+    overrides = args.overrides and read_overrides(args.overrides) or {}
 
-for sample, metadata in sorted(samples.items()):
-    context = {
-        'sample': sample,
-        'library': sample,
-        'description': metadata['Description'],
-    }
-    if sample in overrides:
-        context.update({
-            'sample': overrides[sample]['Sample'],
-            'library': overrides[sample]['Library'],
-            'description': overrides[sample]['Description'].replace(' ', '%20'),
-        })
+    src_root = os.path.abspath(args.src)
+    dest = os.path.abspath(args.dest)
 
-    srcdir = os.path.join(args.src, metadata['Sample_ID'])
+    if not os.path.isdir(args.dest):
+        os.makedirs(args.dest)
 
-    if args.verbose:
-        print('Looking for FASTQ files in {}'.format(srcdir))
+    for sample, metadata in sorted(samples.items()):
+        context = {
+            'sample': sample,
+            'library': sample,
+            'description': metadata['Description'],
+        }
+        if sample in overrides:
+            context.update({
+                'sample': overrides[sample]['Sample'],
+                'library': overrides[sample]['Library'],
+                'description': overrides[sample]['Description'].replace(' ', '%20'),
+            })
 
-    for fq in sorted(os.listdir(srcdir)):
-        m = SEQCORE_RE.match(fq)
-        if not m:
-            print("""File does not match our notion of the sequencing core's file naming scheme.""", file=sys.stderr)
-            sys.exit(1)
+        srcdir = os.path.join(args.src, metadata['Sample_ID'])
 
-        context.update(m.groupdict())
+        logging.debug('Looking for FASTQ files in {}'.format(srcdir))
 
-        dst = os.path.join(args.dest, MKA_TEMPLATE.format(**context))
-        srcpath = os.path.abspath(os.path.join(srcdir, fq))
-        srcrelpath = os.path.relpath(srcpath, dest)
-        print('Linking {} -> {}'.format(srcrelpath, dst))
-        os.symlink(srcrelpath, dst)
+        for fq in sorted(os.listdir(srcdir)):
+            m = SEQCORE_RE.match(fq)
+            if not m:
+                logging.fatal("""File does not match our notion of the sequencing core's file naming scheme.""")
+                sys.exit(1)
+
+            context.update(m.groupdict())
+
+            dst = os.path.join(args.dest, MKA_TEMPLATE.format(**context))
+            srcpath = os.path.abspath(os.path.join(srcdir, fq))
+            srcrelpath = os.path.relpath(srcpath, dest)
+            logging.info('Linking {} -> {}'.format(srcrelpath, dst))
+            try:
+                mka.path.symlink(srcrelpath, dst, args.force)
+            except OSError as e:
+                logging.fatal('Could not create symlink from {} to {}: {}'.format(srcrelpath, dst, e))
+                logging.info('You might try removing {} manually, or running {} with the --force option.'.format(dst, PROGRAM))
+                sys.exit(1)

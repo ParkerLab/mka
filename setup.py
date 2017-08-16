@@ -12,14 +12,16 @@ readme = open('README.rst').read()
 
 requirements = [
     'Jinja2',
-    'python-dateutil'
+    'bs4',
+    'python-dateutil',
+    'requests'
 ]
 
 test_requirements = []
 
 setup(
     name='mka',
-    version='0.8.5',
+    version='0.8.6',
     description="Generates analysis pipelines from templates.",
     long_description=readme + '\n\n',
     author="The Parker Lab",
@@ -30,7 +32,9 @@ setup(
         'mka': ['templates/*']
     },
     scripts=[
+        'scripts/fetchgeo',
         'scripts/mka',
+        'scripts/mkgi',
         'scripts/screname'
     ],
     include_package_data=True,

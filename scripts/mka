@@ -24,10 +24,12 @@ import textwrap
 import dateutil.parser
 import jinja2
 import mka
+import mka.log
+import mka.path
 
 
 PROGRAM = 'mka'
-PROGRAM_VERSION = '0.8.5'
+PROGRAM_VERSION = mka.__version__
 
 LIBRARY_FILENAME_PATTERN = re.compile(
     '^(?P<sample>.*?)'
@@ -54,28 +56,6 @@ URL_PREFIXES = {
     'SRR': 'http://www.ncbi.nlm.nih.gov/sra/?term=',
     'GSM': 'http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc='
 }
-
-
-class ColoringStreamHandler(logging.StreamHandler):
-    LEVEL_COLORS = {
-        logging.DEBUG: '\033[34m',
-        logging.ERROR: '\033[31m',
-        logging.FATAL: '\033[31m',
-        logging.WARN: '\033[33m',
-    }
-
-    def emit(self, record):
-        tty = os.isatty(self.stream.fileno())
-        if tty:
-            color = self.LEVEL_COLORS.get(record.levelno, None)
-            if color:
-                self.stream.write(color)
-
-        self.stream.write(self.format(record))
-        self.stream.write('\n')
-        if tty:
-            self.stream.write('\033[0m')
-        self.flush()
 
 
 class MissingTemplate(Exception):
@@ -437,21 +417,8 @@ def initialize_git_repo(directory):
         subprocess.check_output(['git', 'commit', '-m', 'initial commit'])
 
 
-class LoggingArgumentParser(argparse.ArgumentParser):
-    def exit(self, status=0, message=None):
-        if message:
-            if status == 0:
-                self._print_message(message, log=logging.info)
-            else:
-                self._print_message(message, log=logging.error)
-        sys.exit(status)
-
-    def _print_message(self, message, file=None, log=logging.info):
-        log(message)
-
-
 def parse_arguments():
-    parser = LoggingArgumentParser(
+    parser = mka.log.LoggingArgumentParser(
         prog=PROGRAM,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent("""
@@ -496,12 +463,12 @@ def parse_arguments():
     parser.add_argument('-a', '--analysis-path', help='The directory where the analysis will run. If not specified, it will run in the control directory.')
     parser.add_argument('-d', '--description', help='A description of the analysis.')
     parser.add_argument('-i', '--interactive', action='store_true', help='Prompt for library metadata, instead of just inferring from filenames.')
-    parser.add_argument('-l', '--library-defaults', help='A JSON file containing default metadata to use for all libraries. This will override metadata parsed from the file supplied with the --run-info option.')
+    parser.add_argument('-l', '--library-defaults', type=mka.path.FilePath(require_readable=True), help='A JSON file containing default metadata to use for all libraries. This will override metadata parsed from the file supplied with the --run-info option.')
     parser.add_argument('-t', '--analysis-type', choices=get_supported_analyses(), help='The type of pipeline to create.')
     parser.add_argument('-n', '--name', required=False, help="""The name for the analysis (default: derived from the control directory).""")
-    parser.add_argument('-r', '--run-info', help='The path to a "run info" CSV file included with results from the UM DNA Sequencing Core. Library metadata will be supplemented with the run info. This metadata will be overridden with any supplied with --library-defaults or parsed from library FASTQ files.')
+    parser.add_argument('-r', '--run-info', type=mka.path.FilePath(require_readable=True), help='The path to a "run info" CSV file included with results from the UM DNA Sequencing Core. Library metadata will be supplemented with the run info. This metadata will be overridden with any supplied with --library-defaults or parsed from library FASTQ files.')
     parser.add_argument('control_path', help='The directory for the control files.')
-    parser.add_argument('libraries', metavar='library', nargs='+', help='One or more FASTQ files containing sequenced libraries.')
+    parser.add_argument('libraries', metavar='library', nargs='+', type=mka.path.FilePath(require_readable=True), help='One or more FASTQ files containing sequenced libraries.')
 
     return parser.parse_args()
 
@@ -509,9 +476,6 @@ def parse_arguments():
 def shquote(arg):
     return """'{}'""".format(arg.replace("'", "\'"))
 
-    # use single quotes, and put single quotes into double quotes
-    # the string $'b is then quoted as '$'"'"'b'
-    # return "'" + s.replace("'", "'\"'\"'") + "'"
 
 def reconstruct_command_line(args):
     command_line = [sys.argv[0]]
@@ -547,7 +511,7 @@ def reconstruct_command_line(args):
 if __name__ == '__main__':
 
     root = logging.getLogger()
-    handler = ColoringStreamHandler()
+    handler = mka.log.ColoringStreamHandler()
     handler.setFormatter(logging.Formatter(fmt='%(message)s'))
     root.addHandler(handler)
     root.setLevel(logging.INFO)

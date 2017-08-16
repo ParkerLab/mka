@@ -1,104 +1,172 @@
-#!/bin/bash
+#!/usr/bin/env python
 
-#
-# mkgi: make genome index
-#
-# Creates indexes for mka-supported assay types. Uses bwa for
-# ATAC-seq, STAR for RNA-seq.
-#
+from __future__ import print_function
 
-function perror() {
-    >&2 printf "$1\n"
+import argparse
+import logging
+import os
+import re
+import subprocess
+import sys
+import textwrap
+
+import mka
+import mka.log
+import mka.path
+
+
+PROGRAM='mkgi'
+PROGRAM_VERSION = mka.__version__
+
+INDEX_PROGRAMS = {
+    'bwa': {
+        'version_command': """bwa""",
+        'version_re': re.compile('Version: (\d+\.\d+\.\d+)(-r.*)*'),
+        'create_index_command': """bwa index {extra} -p {genome_name} {genome_name}""",
+    },
+
+    'STAR': {
+        'version_command': """STAR --version""",
+        'version_re': re.compile('STAR_(\d+\.\d+\.\d+.*)'),
+        'create_index_command': """STAR {extra} --runMode genomeGenerate --genomeDir {index_dir} --genomeFastaFiles {genome_name}"""
+    }
 }
 
-show_help() {
-    perror
-    perror "Usage:"
-    perror "  ${0} INDEX_TYPE GENOME_NAME GENOME_FILE REF_ROOT [SJ_GTF]"
-    perror
-    perror "  where:"
-    perror "    INDEX_TYPE is either 'bwa' or 'STAR'"
-    perror "    ORGANISM is the name of the reference genome organism: 'human', 'mouse', etc."
-    perror "    GENOME_NAME is the name of the reference genome: 'hg19', 'mm9', etc."
-    perror "    GENOME_FILE is the FASTA file containing the reference genome"
-    perror "    REF_ROOT is the top of the directory tree containing reference genomes"
-    perror "    SJ_GTF is a GTF file of splice junction annotations, only used for STAR"
-    perror
-    perror "If submitting under a workload manager like PBS or Slurm, bwa should be given"
-    perror "two hours and 8GB of memory. STAR should also finish in two hours, with 32GB."
-    exit 0
-}
 
-if [[ 5 -ne $# && 6 -ne $# ]]
-then
-    show_help
-    exit 1
-fi
+def index_program_string():
+    programs = list(INDEX_PROGRAMS.keys())
+    return ' or '.join([', '.join(programs[:-1]), programs[-1]])
 
-INDEX_TYPE=$1
-ORGANISM=$2
-GENOME_NAME=$3
-GENOME_FILE=$(readlink -m $4)
-REF_ROOT=$(readlink -m $5)
 
-SJ_GTF=""
-if [[ 6 -eq $# ]]
-then
-    SJ_GTF=$(readlink -m $6)
-fi
+def get_version(program):
+    program_metadata = INDEX_PROGRAMS[program]
+    version_command = program_metadata['version_command'].format(**locals())
+    logging.debug('Getting {program} version with "{version_command}"\n'.format(**locals()))
 
-function make_bwa_index() {
-    BWA=$(which bwa)
-    if [ -z $BWA ]
-    then
-        perror "bwa is not on your PATH."
-        exit 1
-    fi
+    output = ''
+    try:
+        output = subprocess.check_output(version_command.split(), stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        output = e.output
 
-    BWA_VERSION=$(bwa 2>&1 | grep Version: | sed -r -e 's/Version: //' -e 's/-.*//')
+    match = program_metadata['version_re'].search(output)
+    if not match:
+        logging.fatal('Could not determine {program} version. Make sure {program} is on your PATH.'.format(**locals()))
+        sys.exit(1)
 
-    index_dir="$REF_ROOT/$ORGANISM/$GENOME_NAME/index/bwa/$BWA_VERSION"
-    mkdir -p "$index_dir"
+    return match.group(1)
 
-    cp $GENOME_FILE "$index_dir/$GENOME_NAME"
-    cd $index_dir
 
-    index_cmd="bwa index -p $GENOME_NAME $GENOME_NAME"
-    $index_cmd
-}
+def link_or_copy(src, dest, description=None):
+    description = description and ' {}'.format(description) or ''
+    try:
+        if os.path.exists(dest):
+            os.unlink(dest)
 
-function make_star_index() {
-    STAR=$(which STAR)
-    if [ -z $STAR ]
-    then
-        perror "STAR is not on your PATH."
-        exit 1
-    fi
+        os.link(src, dest)
+        logging.debug('Created hard link from{description}:\n\t{src}\nto:\n\t{dest}\n'.format(**locals()))
+    except OSError:
+        try:
+            os.copy(src, dest)
+            logging.debug('Copied:\n\t{genome_file}\nto:\n\t{dest}')
+        except Exception as e:
+            logging.fatal('Could not copy{description}:\n\t{src}\nto:\n\t{dest}'.format(**locals()))
 
-    STAR_VERSION=$(STAR --version | sed -r -e 's/STAR_//')
 
-    index_dir="$REF_ROOT/$ORGANISM/$GENOME_NAME/index/STAR/$STAR_VERSION"
-    mkdir -p "$index_dir"
+def create_index_dir(program, reference_root, organism, genome_name, genome_file, chromosome_size_file):
+    version = get_version(program)
 
-    zcat $GENOME_FILE > "$index_dir/$GENOME_NAME"
-    cd $index_dir
+    index_dir = os.path.abspath('{reference_root}/{organism}/{genome_name}/index/{program}/{version}'.format(**locals()))
 
-    index_cmd="STAR --runMode genomeGenerate --runThreadN 8 --genomeDir $index_dir --genomeFastaFiles $GENOME_NAME"
-    if [ $SJ_GTF ]
-    then
-        index_cmd="$index_cmd --sjdbGTFfile $SJ_GTF"
-    fi
+    mka.path.mkdir(index_dir)
 
-    $index_cmd
-}
+    link_or_copy(genome_file, os.path.join(index_dir, genome_name), 'reference FASTA file')
 
-if [[ "bwa" = "$INDEX_TYPE" ]]
-then
-    make_bwa_index
-elif [[ "STAR" = "$INDEX_TYPE" ]]
-then
-    make_star_index
-else
-    perror "Unsupported index type: $INDEX_TYPE"
-    exit 1
-fi
+    link_or_copy(chromosome_size_file, os.path.join(index_dir, '{}.chrom_sizes'.format(genome_name)))
+
+    logging.debug('Created {program} {version} index directory for {organism} reference {genome_name}:\n\t{index_dir}\n'.format(**locals()))
+
+    return index_dir
+
+
+def make_index(program, reference_root, organism, genome_name, genome_file, chromosome_size_file, extra_options=[]):
+    logging.info('Creating {program} index for {organism} reference {genome_name} under {reference_root}\n'.format(**locals()))
+
+    program_metadata = INDEX_PROGRAMS[program]
+
+    index_dir = create_index_dir(program, reference_root, organism, genome_name, genome_file, chromosome_size_file)
+    os.chdir(index_dir)
+
+    extra = ' '.join(extra_options)
+    index_command = program_metadata['create_index_command'].format(**locals())
+    try:
+        logging.debug("""Running index command "{index_command}"\n""".format(**locals()))
+        subprocess.check_output(index_command.split(), stderr=subprocess.STDOUT)
+
+        try:
+            current_link = os.path.abspath('{reference_root}/{organism}/{genome_name}/index/{program}/current'.format(**locals()))
+
+            mka.path.symlink(index_dir, current_link, overwrite=True)
+
+            logging.debug('Created "current" symlink to {index_dir}'.format(**locals()))
+        except Exception as e:
+            logging.fatal('Could not create "current" symlink to {index_dir}'.format(**locals()))
+            sys.exit(1)
+
+    except subprocess.CalledProcessError as e:
+        logging.fatal('{program} index command {index_command} returned {e.returncode}'.format(**locals()))
+        logging.fatal('Output:\n{}'.format(e.output))
+        sys.exit(1)
+
+
+def parse_arguments():
+    parser = mka.log.LoggingArgumentParser(
+        prog=PROGRAM,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="""Creates genome indexes for mka-supported assays.""",
+        epilog=textwrap.dedent("""
+
+        You can pass any additional program-specific options at the end of the command line.
+
+        For example, you could tell STAR to use 16 threads and a
+        splice junction annotation file by appending:
+
+        --sjdbGTFfile annotation.gtf --runThreadN 16
+
+        """)
+    )
+
+    parser.add_argument('-v', '--verbose', action='store_true', help='Talk more.')
+    parser.add_argument('--version', action='version', version=PROGRAM_VERSION)
+
+    parser.add_argument('program', help="""The program whose index should be created: {}""".format(index_program_string()))
+    parser.add_argument('organism', help="""The name of the reference genome organism: 'human', 'mouse', etc.""")
+    parser.add_argument('genome_name', help="""The name of the reference genome: 'hg19', 'mm9', etc.""")
+    parser.add_argument('genome_file', type=mka.path.FilePath(require_readable=True), help="""The FASTA file containing the reference genome.""")
+    parser.add_argument('chromosome_size_file', type=mka.path.FilePath(require_readable=True), help="""A file containing for each of the reference genome's chromosomes, a line containing its name, a tab character, and its size.""")
+    parser.add_argument('reference_root', help="""The top of the directory tree containing reference genomes, e.g. '/lab/data/reference'. This tool would create a directory like '/lab/data/reference/human/hg19/index/bwa/0.7.15' or '/lab/data/reference/human/hg19/index/STAR/2.5.2b', and a 'current' symlink that points to that directory.""")
+
+    return parser.parse_known_args()
+
+
+if __name__ == '__main__':
+
+    root = logging.getLogger()
+    handler = mka.log.ColoringStreamHandler()
+    handler.setFormatter(logging.Formatter(fmt='%(message)s'))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    args, extra_args = parse_arguments()
+
+    root.setLevel(args.verbose and logging.DEBUG or logging.INFO)
+
+    make_index(
+        args.program,
+        os.path.abspath(args.reference_root),
+        args.organism,
+        args.genome_name,
+        os.path.abspath(args.genome_file),
+        os.path.abspath(args.chromosome_size_file),
+        extra_args
+    )
