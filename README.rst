@@ -55,7 +55,7 @@ https://github.com/ParkerLab/mka/``:
 Pipeline requirements
 ---------------------
 
-* `FASTQC`_
+* `FastQC`_
 * `cta`_, our C++ version of Jason Buenrostro's adapter trimmer
 * `bwa`_
 * `MACS2`_
@@ -197,7 +197,7 @@ when it finishes, or if any job encounters an error.
                     DNA-binding proteins and nucleosome position,
                     Buenrostro et al., Nature Methods 2013`_
 
-.. _FASTQC: http://www.bioinformatics.babraham.ac.uk/projects/fastqc/
+.. _FastQC: http://www.bioinformatics.babraham.ac.uk/projects/fastqc/
 .. _cta: https://github.com/ParkerLab/cta/
 .. _bwa: http://bio-bwa.sourceforge.net/
 .. _MACS2: https://github.com/taoliu/MACS
