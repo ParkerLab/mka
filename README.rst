@@ -48,7 +48,9 @@ These should automatically be installed by pip when you ``pip install
 https://github.com/ParkerLab/mka/``:
 
 * Jinja2
+* bs4
 * python-dateutil
+* requests
 
 Pipeline requirements
 ---------------------
@@ -59,6 +61,7 @@ Pipeline requirements
 * `MACS2`_
 * `bedtools`_
 * `samtools`_
+* `kent`_, Jim Kent's utilities
 * `drmr`_, our tool for working with resource managers like Slurm or
   PBS
 
@@ -200,6 +203,7 @@ when it finishes, or if any job encounters an error.
 .. _MACS2: https://github.com/taoliu/MACS
 .. _bedtools: http://bedtools.readthedocs.io/en/latest/
 .. _samtools: http://samtools.sourceforge.net/
+.. _kent: https://github.com/ucscGenomeBrowser/kent
 .. _drmr: https://github.com/ParkerLab/drmr/
 .. _hub: https://github.com/github/hub
 .. _The genetic regulatory signature of type 2 diabetes in human skeletal muscle, Scott et al., Nature Communications 2016: https://doi.org/10.1038/ncomms11764
